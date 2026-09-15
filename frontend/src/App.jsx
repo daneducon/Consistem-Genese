@@ -47,8 +47,11 @@ export default function App() {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [editingNotebook, setEditingNotebook] = useState(null);
 
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState('updatedAt');
+  const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem('genese_search') || '');
+  const [sortBy, setSortBy] = useState(() => localStorage.getItem('genese_sort') || 'updatedAt');
+  const [searchInput, setSearchInput] = useState(() => localStorage.getItem('genese_search') || '');
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' ? !navigator.onLine : false);
 
   const [dragActiveCreate, setDragActiveCreate] = useState(false);
   const [dragActiveAppend, setDragActiveAppend] = useState(false);
@@ -177,6 +180,21 @@ export default function App() {
     return () => clearInterval(id);
   }, [actionLoading, loadingPhrases.length]);
 
+  // debounce busca (300ms) + persistência + offline
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQuery(searchInput), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+  useEffect(() => { localStorage.setItem('genese_search', searchQuery); }, [searchQuery]);
+  useEffect(() => { localStorage.setItem('genese_sort', sortBy); }, [sortBy]);
+  useEffect(() => {
+    const onOnline = () => setIsOffline(false);
+    const onOffline = () => setIsOffline(true);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
+  }, []);
+
   // atalho / para focar busca e Esc para limpar (como na imagem Nexus)
   useEffect(() => {
     const onKey = (e) => {
@@ -184,11 +202,12 @@ export default function App() {
         e.preventDefault();
         document.getElementById('grid-search')?.focus();
       }
-      if (e.key === 'Escape' && searchQuery) setSearchQuery('');
+      if (e.key === 'Escape' && searchQuery) { setSearchQuery(''); setSearchInput(''); }
+      if (e.key === 'Escape' && confirmDeleteId) setConfirmDeleteId(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [searchQuery, selectedNotebook]);
+  }, [searchQuery, selectedNotebook, confirmDeleteId]);
 
   const resetForm = () => {
     setFormTitle('');
@@ -346,9 +365,9 @@ export default function App() {
     }
   };
 
+  const confirmDelete = (id) => setConfirmDeleteId(id);
   const handleDeleteNotebook = async (id, e) => {
-    e.stopPropagation();
-    if (!window.confirm('Tem certeza que deseja excluir este caderno?')) return;
+    if (e) e.stopPropagation();
     const backup = notebooks.find((nb) => nb.id === id);
     const prevSelected = selectedNotebook;
     try {
@@ -617,16 +636,20 @@ export default function App() {
                   <input
                     id="grid-search"
                     type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
                     placeholder="Buscar cadernos criados..."
-                    className="w-full h-[48px] pl-4 pr-4 bg-white border border-[#c7c6ca] rounded-xl text-sm text-[#191c1d] placeholder:text-[#a5a5ab] focus:outline-none focus:border-[#191c1d] shadow-[0_4px_20px_-2px_rgba(46,46,48,0.04)]"
+                    aria-label="Buscar cadernos"
+                    className="w-full h-[48px] pl-4 pr-10 bg-white border border-[#c7c6ca] rounded-xl text-sm text-[#191c1d] placeholder:text-[#a5a5ab] focus:outline-none focus:border-[#191c1d] focus:ring-2 focus:ring-[#191c1d]/10 shadow-[0_4px_20px_-2px_rgba(46,46,48,0.04)]"
                   />
+                  {searchInput && (
+                    <button onClick={() => { setSearchInput(''); setSearchQuery(''); }} aria-label="Limpar busca" className="absolute right-3 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded-full hover:bg-[#f8f9fa] text-[#46464a]">×</button>
+                  )}
                 </div>
                 <p className="mt-2 text-[11px] text-[#46464a] flex items-center gap-1.5"><span className="inline-flex items-center justify-center min-w-[16px] h-4 px-1 bg-white border border-[#e8e9eb] rounded text-[10px] font-medium">/</span> buscar <span className="inline-flex items-center justify-center min-w-[22px] h-4 px-1 bg-white border border-[#e8e9eb] rounded text-[10px] font-medium">Esc</span> limpar</p>
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   {suggestionChips.map((s) => (
-                    <button key={s} onClick={() => setSearchQuery(s)} className="px-3 py-1.5 bg-[#26272b] hover:bg-[#2e2e30] border border-[#26272b] rounded-full text-xs text-white transition-colors">{s}</button>
+                    <button key={s} onClick={() => { setSearchInput(s); setSearchQuery(s); }} className="px-3 py-1.5 bg-[#26272b] hover:bg-[#2e2e30] border border-[#26272b] rounded-full text-xs text-white transition-colors focus:outline-none focus:ring-2 focus:ring-[#191c1d]/20">{s}</button>
                   ))}
                 </div>
               </div>
@@ -637,8 +660,8 @@ export default function App() {
                 <option value="title">A-Z</option>
                 <option value="sourcesCount">Mais fontes</option>
               </select>
-              <span className="text-xs text-[#46464a]">{filteredNotebooks.length} cadernos</span>
-              {searchQuery && <button onClick={() => setSearchQuery('')} className="text-xs text-[#46464a] underline">Limpar busca</button>}
+              <span className="text-xs text-[#46464a]" aria-live="polite">{filteredNotebooks.length} cadernos{searchQuery && ` para "${searchQuery}"`}</span>
+              {searchQuery && <button onClick={() => { setSearchQuery(''); setSearchInput(''); }} className="text-xs text-[#46464a] underline focus:outline-none focus:ring-2 focus:ring-[#191c1d]/20 rounded">Limpar busca</button>}
               <Tooltip content={syncing ? `Sincronizando... ${syncCountdown}s` : lastSync ? `Última sincronização: ${lastSync}` : 'Sincronizar com NotebookLM agora'} side="top">
                 <button onClick={handleSync} disabled={syncing} className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#eaf7f0] hover:bg-[#d8f0e3] border border-[#eaf7f0] rounded-full text-xs font-medium text-[#2e9e66] disabled:opacity-50 transition-colors">
                   {syncing ? <InlineSpinner size={10} light={false} className="border-[#2e9e66] border-t-transparent" /> : <span className="w-1.5 h-1.5 rounded-full bg-[#2e9e66]"></span>}{syncing ? `Sincronizando... ${syncCountdown}s` : lastSync ? `Sincronizado · ${lastSync}` : 'Sincronizado'}
@@ -648,14 +671,17 @@ export default function App() {
             {loadingList ? (
               <GridSkeleton count={6} />
             ) : notebooks.length === 0 ? (
-              <div className="py-16 text-center bg-white border border-[#e8e9eb] rounded-xl">
-                <p className="text-sm text-[#191c1d]">Nenhum caderno cadastrado</p>
-                <p className="text-xs text-[#46464a] mt-1">Clique em <span className="font-medium text-[#191c1d]">“Criar novo caderno”</span> para iniciar.</p>
+              <div className="py-16 text-center bg-white border border-dashed border-[#c7c6ca] rounded-xl px-6">
+                <div className="w-10 h-10 mx-auto flex items-center justify-center rounded-full bg-[#f8f9fa] border border-[#e8e9eb] text-[#a5a5ab]">＋</div>
+                <p className="mt-3 text-sm font-medium text-[#191c1d]">Nenhum caderno cadastrado</p>
+                <p className="text-xs text-[#46464a] mt-1 max-w-md mx-auto">Reúna PDFs, links e vídeos e gere seu primeiro diagnóstico de T&D com Gemma em segundos.</p>
+                <button onClick={() => { resetForm(); setIsCreateModalOpen(true); }} className="mt-4 px-5 py-2 bg-[#df5241] hover:bg-[#c84434] text-white rounded-full text-xs font-medium focus:outline-none focus:ring-2 focus:ring-[#df5241]/20">Criar novo caderno</button>
               </div>
             ) : filteredNotebooks.length === 0 ? (
-              <div className="py-16 text-center bg-white border border-[#e8e9eb] rounded-xl">
+              <div className="py-16 text-center bg-white border border-[#e8e9eb] rounded-xl px-6">
                 <p className="text-sm text-[#191c1d]">Nenhum resultado para "{searchQuery}"</p>
-                <button onClick={() => setSearchQuery('')} className="mt-2 text-xs text-[#df5241]">Limpar busca</button>
+                <p className="text-xs text-[#46464a] mt-1">{notebooks.length} cadernos no total — tente outro termo ou limpe os filtros.</p>
+                <button onClick={() => { setSearchQuery(''); setSearchInput(''); }} className="mt-3 px-4 py-2 bg-white border border-[#e8e9eb] rounded-full text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#191c1d]/20">Limpar busca</button>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -671,8 +697,8 @@ export default function App() {
                         </Tooltip>
                         {openMenuId === nb.id && (
                           <div className="absolute right-0 mt-1 w-40 bg-white border border-[#e8e9eb] rounded-xl shadow-[0_4px_20px_-2px_rgba(46,46,48,0.08)] z-30 py-1 text-xs">
-                            <button onClick={(e) => openEditModal(nb, e)} className="w-full text-left px-3 py-2 hover:bg-[#f8f9fa] text-[#191c1d]">Editar caderno</button>
-                            <button onClick={(e) => handleDeleteNotebook(nb.id, e)} className="w-full text-left px-3 py-2 hover:bg-[#fff5f4] text-[#ba1a1a]">Excluir</button>
+                            <button onClick={(e) => openEditModal(nb, e)} className="w-full text-left px-3 py-2 hover:bg-[#f8f9fa] text-[#191c1d] focus:bg-[#f8f9fa] focus:outline-none">Editar caderno</button>
+                            <button onClick={(e) => { e.stopPropagation(); confirmDelete(nb.id); setOpenMenuId(null); }} className="w-full text-left px-3 py-2 hover:bg-[#fff5f4] text-[#ba1a1a] focus:bg-[#fff5f4] focus:outline-none">Excluir</button>
                           </div>
                         )}
                       </div>
@@ -986,6 +1012,25 @@ export default function App() {
                 </div>
               </form>
             </div>
+          </div>
+        )}
+
+        {confirmDeleteId && (
+          <div className="fixed inset-0 bg-[#191c1d]/40 backdrop-blur-sm flex items-center justify-center p-4 z-[60]" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+            <div className="bg-white border border-[#e8e9eb] rounded-xl max-w-sm w-full p-6 shadow-[0_8px_32px_-4px_rgba(46,46,48,0.16)]">
+              <h3 id="confirm-title" className="text-sm font-semibold text-[#191c1d]">Excluir caderno?</h3>
+              <p className="mt-1 text-xs leading-5 text-[#46464a]">Essa ação remove o caderno do seu workspace e do Google NotebookLM. Não pode ser desfeita, apenas recriada.</p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button onClick={() => setConfirmDeleteId(null)} autoFocus className="px-4 py-2 bg-white border border-[#e8e9eb] rounded-full text-xs text-[#191c1d] focus:outline-none focus:ring-2 focus:ring-[#191c1d]/20">Cancelar</button>
+                <button onClick={() => { const id = confirmDeleteId; setConfirmDeleteId(null); handleDeleteNotebook(id); }} className="px-5 py-2 bg-[#ba1a1a] hover:bg-[#93000a] text-white rounded-full text-xs font-medium focus:outline-none focus:ring-2 focus:ring-[#ba1a1a]/30">Excluir</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isOffline && (
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 px-4 py-2 bg-[#191c1d] text-white text-xs rounded-full shadow-lg" role="status" aria-live="polite">
+            Sem conexão — alterações serão sincronizadas ao reconectar
           </div>
         )}
 
