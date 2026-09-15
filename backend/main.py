@@ -424,34 +424,36 @@ async def auth_logout():
 
 @app.get("/api/v1/sync/status")
 async def sync_status():
-    """Retorna último sync e status do NotebookLM"""
+    """Status leve do sync — nunca dispara browser, nunca falha (ideal p/ polling/Vercel)."""
     from pathlib import Path
     import json, time
     cache_path = Path(__file__).parent / "data" / "google_notebooks_cache.json"
     last_sync = None
+    ts = 0
     if cache_path.exists():
         try:
             j = json.loads(cache_path.read_text(encoding="utf-8"))
             ts = j.get("ts", 0)
             last_sync = time.strftime("%d/%m/%Y-%H:%M", time.localtime(ts))
-        except: pass
-    nblm_ready, nblm_msg = mvp_nblm.is_notebooklm_ready()
-    # testa live
-    live_ok = True
-    live_err = None
-    try:
-        lst = await mvp_nblm.list_google_notebooks()
-        if not lst:
-            # pode ser cache; verifica se houve erro de auth no log? assume ok se cache recente
+        except Exception:
             pass
-    except Exception as e:
-        live_ok = False
-        live_err = str(e)
-    return {"last_sync": last_sync or "nunca", "notebooklm_ready": nblm_ready, "live_ok": live_ok, "msg": nblm_msg, "error": live_err}
+    nblm_ready, nblm_msg = mvp_nblm.is_notebooklm_ready()
+    is_vercel = bool(os.getenv("VERCEL") or os.getenv("VERCEL_ENV"))
+    # live apenas se já temos auth local; na Vercel sempre reporta cache para não estourar timeout
+    return {
+        "last_sync": last_sync or "nunca",
+        "notebooklm_ready": nblm_ready,
+        "live_ok": bool(nblm_ready and not is_vercel),
+        "live": bool(nblm_ready and not is_vercel),
+        "cached": bool(not (nblm_ready and not is_vercel)),
+        "mode": "live" if (nblm_ready and not is_vercel) else "cache",
+        "msg": nblm_msg,
+        "error": None,
+    }
 
 @app.post("/api/v1/notebooks/sync")
 async def sync_notebooks(request: Request):
-    """Força sincronização com Google NotebookLM - leve, só lista (não busca fontes de cada)"""
+    """Sync resiliente: nunca retorna 5xx por causa do NotebookLM. Sempre 200 com {cached,live}."""
     _require_user(request)
     import json, time
     from pathlib import Path
@@ -459,40 +461,48 @@ async def sync_notebooks(request: Request):
     before_mtime = cache_path.stat().st_mtime if cache_path.exists() else 0
     try:
         mvp_nblm._sources_cache.clear()
-    except: pass
-    google_nbs = await mvp_nblm.list_google_notebooks()
+    except Exception:
+        pass
+    try:
+        google_nbs = await mvp_nblm.list_google_notebooks()
+    except Exception:
+        google_nbs = []
+    me = _get_user_from_request(request) or {}
+    local_count = len([
+        k for k, v in store.get_all_notebooks_meta().items()
+        if not v.get("owner") or v.get("owner") == me.get("sub", "")
+    ])
     if not google_nbs:
-        # Fase 2: em produção (Vercel) NotebookLM não tem storage_state — não falha, apenas retorna cache local
         try:
             j = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
             last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(j.get("ts", time.time())))
-        except:
+        except Exception:
             last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time()))
-        # tenta retornar notebooks do store local como fallback
-        local_count = len([k for k, v in store.get_all_notebooks_meta().items() if not v.get("owner") or v.get("owner") == _get_user_from_request(request).get("sub","")]) if _get_user_from_request(request) else 0
-        return {"synced": 0, "count": local_count, "last_sync": last, "cached": True, "warning": "NotebookLM não disponível em produção — exibindo cadernos locais. Rode notebooklm login localmente para sincronizar."}
+        return {"synced": 0, "count": local_count, "last_sync": last, "cached": True, "live": False, "mode": "cache"}
     after_mtime = cache_path.stat().st_mtime if cache_path.exists() else 0
     is_cached = before_mtime != 0 and before_mtime == after_mtime
     if is_cached:
         try:
             j = json.loads(cache_path.read_text(encoding="utf-8"))
             last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(j.get("ts", time.time())))
-        except:
+        except Exception:
             last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time()))
-        return {"synced": len(google_nbs), "count": len(google_nbs), "last_sync": last, "cached": True, "warning": "Sincronização em cache — sessão do Google expirada. Rode py -m notebooklm login para atualizar."}
-    # live fresco: só garante que store tem entrada, não busca fontes (grid só precisa de sources_count da listagem)
-    user = _get_user_from_request(request)
-    owner = user["sub"] if user else ""
+        return {"synced": len(google_nbs), "count": len(google_nbs), "last_sync": last, "cached": True, "live": False, "mode": "cache"}
+    # live fresco: só garante que store tem entrada, não busca fontes
+    owner = me.get("sub", "") if me else ""
     synced = 0
     for nb in google_nbs:
-        nid = nb["id"]
-        meta = store.get_notebook_meta(nid)
-        if not meta:
-            store.save_notebook_meta(nid, nb["title"], "Caderno importado da Conta Google", "", [], owner=owner)
-        elif meta.get("title") != nb["title"]:
-            store.update_notebook_meta(nid, title=nb["title"])
-        synced += 1
-    return {"synced": synced, "count": len(google_nbs), "last_sync": time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time()))}
+        try:
+            nid = nb["id"]
+            meta = store.get_notebook_meta(nid)
+            if not meta:
+                store.save_notebook_meta(nid, nb["title"], "Caderno importado da Conta Google", "", [], owner=owner)
+            elif meta.get("title") != nb["title"]:
+                store.update_notebook_meta(nid, title=nb["title"])
+            synced += 1
+        except Exception:
+            continue
+    return {"synced": synced, "count": len(google_nbs), "last_sync": time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time())), "cached": False, "live": True, "mode": "live"}
 
 # ==============================================================================
 # TELA 1: GRID & CADERNOS
