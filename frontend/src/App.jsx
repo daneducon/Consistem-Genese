@@ -20,7 +20,8 @@ const apiHeaders = (extra = {}) => {
 };
 const apiFetch = (url, opts = {}) => {
   opts.headers = apiHeaders(opts.headers || {});
-  opts.credentials = opts.credentials || 'include';
+  // credentials apenas onde precisa de cookie (auth), notebooks usam Bearer header
+  if (!opts.credentials) opts.credentials = 'omit';
   return fetch(url, opts);
 };
 

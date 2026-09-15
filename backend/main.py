@@ -39,9 +39,10 @@ else:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Requested-With"],
+    expose_headers=["*"],
     max_age=600,
 )
 
@@ -52,8 +53,8 @@ async def _security_headers(request, call_next):
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    # CSP básico: permite self + fonts/google + vercel insights
-    resp.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline' https://fonts.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://openrouter.ai"
+    # CSP básico: permite self + fonts/google + gsi + vercel
+    resp.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; connect-src 'self' https://openrouter.ai https://accounts.google.com https://oauth2.googleapis.com"
     if os.getenv("VERCEL_ENV") == "production" or os.getenv("ENV") == "production":
         resp.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
     return resp
