@@ -5,7 +5,12 @@ import threading
 from pathlib import Path
 from datetime import datetime
 
-DATA_FILE = Path(__file__).parent / "data" / "notebooks_store.json"
+# Vercel serverless: /var/task é read-only — store vai para /tmp (efêmero por
+# instância; dados live são reconstruídos do Google a cada listagem).
+if os.getenv("VERCEL") or os.getenv("VERCEL_ENV"):
+    DATA_FILE = Path(tempfile.gettempdir()) / "genese_notebooks_store.json"
+else:
+    DATA_FILE = Path(__file__).parent / "data" / "notebooks_store.json"
 _lock = threading.Lock()
 
 def _load_store() -> dict:

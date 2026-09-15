@@ -429,9 +429,8 @@ async def auth_logout():
 @app.get("/api/v1/sync/status")
 async def sync_status():
     """Status leve do sync — nunca dispara browser, nunca falha (ideal p/ polling/Vercel)."""
-    from pathlib import Path
     import json, time
-    cache_path = Path(__file__).parent / "data" / "google_notebooks_cache.json"
+    cache_path = mvp_nblm.google_cache_path()
     last_sync = None
     ts = 0
     if cache_path.exists():
@@ -442,15 +441,14 @@ async def sync_status():
         except Exception:
             pass
     nblm_ready, nblm_msg = mvp_nblm.is_notebooklm_ready()
-    is_vercel = bool(os.getenv("VERCEL") or os.getenv("VERCEL_ENV"))
-    # live apenas se já temos auth local; na Vercel sempre reporta cache para não estourar timeout
+    # leve: só lê arquivo + checa auth (sem rede), então pode reportar live real
     return {
         "last_sync": last_sync or "nunca",
         "notebooklm_ready": nblm_ready,
-        "live_ok": bool(nblm_ready and not is_vercel),
-        "live": bool(nblm_ready and not is_vercel),
-        "cached": bool(not (nblm_ready and not is_vercel)),
-        "mode": "live" if (nblm_ready and not is_vercel) else "cache",
+        "live_ok": bool(nblm_ready),
+        "live": bool(nblm_ready),
+        "cached": bool(not nblm_ready),
+        "mode": "live" if nblm_ready else "cache",
         "msg": nblm_msg,
         "error": None,
     }
@@ -460,8 +458,7 @@ async def sync_notebooks(request: Request):
     """Sync resiliente: nunca retorna 5xx por causa do NotebookLM. Sempre 200 com {cached,live}."""
     _require_user(request)
     import json, time
-    from pathlib import Path
-    cache_path = Path(__file__).parent / "data" / "google_notebooks_cache.json"
+    cache_path = mvp_nblm.google_cache_path()
     before_mtime = cache_path.stat().st_mtime if cache_path.exists() else 0
     try:
         mvp_nblm._sources_cache.clear()
@@ -557,8 +554,11 @@ async def list_notebooks(request: Request):
                 "sources": [],
                 "google_notebook_url": g_nb.get("url") or f"https://notebooklm.google.com/notebook/{g_id}"
             }
-            # Salva no store para consistência com owner
-            store.save_notebook_meta(g_id, entry["title"], entry["objective"], "", owner=owner)
+            # Salva no store para consistência com owner (nunca pode quebrar a listagem)
+            try:
+                store.save_notebook_meta(g_id, entry["title"], entry["objective"], "", owner=owner)
+            except Exception as e:
+                print(f"[notebooks] aviso: store indisponível ({e})")
             result.append(entry)
 
     return result
@@ -577,7 +577,10 @@ async def get_notebook(notebook_id: str, request: Request):
     sources = live_sources if live_sources else meta.get("sources", [])
 
     if live_sources:
-        store.update_notebook_meta(notebook_id, sources=live_sources)
+        try:
+            store.update_notebook_meta(notebook_id, sources=live_sources)
+        except Exception as e:
+            print(f"[notebooks] aviso: store indisponível ({e})")
 
     return {
         "id": notebook_id,

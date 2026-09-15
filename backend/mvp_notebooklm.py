@@ -122,9 +122,15 @@ def is_notebooklm_ready() -> tuple[bool, str]:
         return False, "modo cache (Vercel sem storage_state — defina NOTEBOOKLM_STORAGE_STATE ou hospede backend fora da Vercel)"
     return False, "auth não encontrada — rode: notebooklm login"
 
+def google_cache_path() -> Path:
+    """Onde fica google_notebooks_cache.json (/tmp na Vercel, que é read-only fora dele)."""
+    if IS_VERCEL:
+        return Path(tempfile.gettempdir()) / "google_notebooks_cache.json"
+    return Path(__file__).parent / "data" / "google_notebooks_cache.json"
+
 def read_notebooks_cache(max_age_s: int = 86400) -> tuple[list, float]:
     """Lê cache de disco sem nunca falhar. Retorna (data, ts)."""
-    cache_path = Path(__file__).parent / "data" / "google_notebooks_cache.json"
+    cache_path = google_cache_path()
     try:
         import json as _json
         import time as _t
@@ -139,7 +145,7 @@ def read_notebooks_cache(max_age_s: int = 86400) -> tuple[list, float]:
 
 async def list_google_notebooks() -> list[dict]:
     """Lista notebooks do Google. Resiliente: timeout curto na Vercel, fallback p/ cache, nunca levanta."""
-    cache_path = Path(__file__).parent / "data" / "google_notebooks_cache.json"
+    cache_path = google_cache_path()
     ready, _msg = is_notebooklm_ready()
     if not ready:
         cached, _ = read_notebooks_cache()
