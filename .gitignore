@@ -1,0 +1,50 @@
+# Env e segredos
+backend/.env
+backend/.env.bak
+frontend/.env
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+
+# NotebookLM auth (não comitar storage_state)
+storage_state.json
+**/storage_state.json
+**/.notebooklm/
+.notebooklm/
+
+# Dados locais (cache) — manter pasta, ignorar json gerado
+backend/data/*.json
+!backend/data/.gitkeep
+
+# Logs
+logs/
+*.log
+npm-cache/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# OneDrive temporários
+~$*
+*.tmp
+*.lock
+
+# Build
+.vite/
