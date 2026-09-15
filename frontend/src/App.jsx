@@ -1,10 +1,21 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
+import rehypeSanitize from 'rehype-sanitize';
 import { GridSkeleton, SourcesSkeleton, MarkdownSkeleton } from './components/Skeleton';
 import Tooltip from './components/Tooltip';
 import InlineSpinner from './components/InlineSpinner';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
+const API_KEY = import.meta.env.VITE_API_KEY || '';
+const apiHeaders = (extra = {}) => {
+  const h = { ...extra };
+  if (API_KEY) h['X-API-Key'] = API_KEY;
+  return h;
+};
+const apiFetch = (url, opts = {}) => {
+  opts.headers = apiHeaders(opts.headers || {});
+  return fetch(url, opts);
+};
 
 export default function App() {
   const [notebooks, setNotebooks] = useState([]);
@@ -62,7 +73,7 @@ export default function App() {
   const fetchNotebooks = async () => {
     setLoadingList(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/notebooks`);
+      const res = await apiFetch(`${API_BASE}/api/v1/notebooks`);
       if (res.ok) {
         const data = await res.json();
         setNotebooks(data);
@@ -80,7 +91,7 @@ export default function App() {
   const fetchNotebookDetail = useCallback(async (notebookId) => {
     setLoadingDetail(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/notebooks/${notebookId}`);
+      const res = await apiFetch(`${API_BASE}/api/v1/notebooks/${notebookId}`);
       if (res.ok) {
         const detail = await res.json();
         setSelectedNotebook((prev) => (!prev || prev.id === notebookId ? detail : prev));
@@ -105,7 +116,7 @@ export default function App() {
 
   const fetchSyncStatus = async () => {
     try {
-      const r = await fetch(`${API_BASE}/api/v1/sync/status`);
+      const r = await apiFetch(`${API_BASE}/api/v1/sync/status`);
       if (r.ok) { const j = await r.json(); setLastSync(j.last_sync); }
     } catch { }
   };
@@ -122,7 +133,7 @@ export default function App() {
     if (syncing) return;
     setSyncing(true);
     try {
-      const r = await fetch(`${API_BASE}/api/v1/notebooks/sync`, { method: 'POST' });
+      const r = await apiFetch(`${API_BASE}/api/v1/notebooks/sync`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.detail || 'Falha ao sincronizar.');
       if (j.cached) {
@@ -239,6 +250,7 @@ export default function App() {
   const xhrPostWithProgress = (url, formData, onProgress) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', url);
+    if (API_KEY) xhr.setRequestHeader('X-API-Key', API_KEY);
     xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100)); };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) { try { resolve(JSON.parse(xhr.responseText)); } catch { resolve(xhr.responseText); } }
@@ -249,7 +261,7 @@ export default function App() {
   });
   const pollJob = async (jobId, onUpdate) => {
     for (let i = 0; i < 120; i++) {
-      const r = await fetch(`${API_BASE}/api/v1/jobs/${jobId}`);
+      const r = await apiFetch(`${API_BASE}/api/v1/jobs/${jobId}`);
       if (!r.ok) throw new Error('Job não encontrado');
       const job = await r.json();
       if (onUpdate) onUpdate(job);
@@ -278,7 +290,7 @@ export default function App() {
       try {
         jobRes = await xhrPostWithProgress(`${API_BASE}/api/v1/notebooks/create-and-analyze-async`, formData, (p) => setUploadProgress(p));
       } catch (xhrErr) {
-        const res = await fetch(`${API_BASE}/api/v1/notebooks/create-and-analyze`, { method: 'POST', body: formData });
+        const res = await apiFetch(`${API_BASE}/api/v1/notebooks/create-and-analyze`, { method: 'POST', body: formData, headers: apiHeaders() });
         if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.detail || 'Erro ao criar'); }
         const createdNb = await res.json();
         setNotebooks((prev) => [createdNb, ...prev]);
@@ -314,9 +326,9 @@ export default function App() {
     if (!target) return;
     setSavingEdit(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/notebooks/${target.id}`, {
+      const res = await apiFetch(`${API_BASE}/api/v1/notebooks/${target.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ title: formTitle.trim(), objective: formObjective.trim() }),
       });
       if (!res.ok) throw new Error('Falha ao atualizar dados do caderno.');
@@ -340,7 +352,7 @@ export default function App() {
     const backup = notebooks.find((nb) => nb.id === id);
     const prevSelected = selectedNotebook;
     try {
-      const res = await fetch(`${API_BASE}/api/v1/notebooks/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`${API_BASE}/api/v1/notebooks/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Falha ao excluir o caderno.');
       setNotebooks((prev) => prev.filter((nb) => nb.id !== id));
       if (selectedNotebook?.id === id) setSelectedNotebook(null);
@@ -382,7 +394,7 @@ export default function App() {
       setTimeout(() => fetchNotebookDetail(selectedNotebook.id), 1500);
     } catch (err) {
       try {
-        const res = await fetch(`${API_BASE}/api/v1/notebooks/${selectedNotebook.id}/append`, { method: 'POST', body: formData });
+        const res = await apiFetch(`${API_BASE}/api/v1/notebooks/${selectedNotebook.id}/append`, { method: 'POST', body: formData, headers: apiHeaders() });
         if (!res.ok) throw new Error('Falha ao anexar fontes ao caderno.');
         const result = await res.json();
         const updatedNb = { ...selectedNotebook, sources: result.sources, sourcesCount: result.sourcesCount };
@@ -407,9 +419,9 @@ export default function App() {
     setJobProgress(0);
     setActionMessage('Solicitando re-análise GEM...');
     try {
-      const r = await fetch(`${API_BASE}/api/v1/notebooks/${selectedNotebook.id}/reanalyze-async`, { method: 'POST' });
+      const r = await apiFetch(`${API_BASE}/api/v1/notebooks/${selectedNotebook.id}/reanalyze-async`, { method: 'POST' });
       if (!r.ok) {
-        const res = await fetch(`${API_BASE}/api/v1/notebooks/${selectedNotebook.id}/reanalyze`, { method: 'POST' });
+        const res = await apiFetch(`${API_BASE}/api/v1/notebooks/${selectedNotebook.id}/reanalyze`, { method: 'POST' });
         if (!res.ok) throw new Error('Falha ao reanalisar o caderno.');
         const result = await res.json();
         const updatedNb = { ...selectedNotebook, analysisMd: result.analysisMd, updatedAt: result.updatedAt };
@@ -759,6 +771,7 @@ export default function App() {
                 ) : displayMd ? (
                   <div className="text-[14px] leading-[22px] text-[#46464a]">
                     <ReactMarkdown
+                      rehypePlugins={[rehypeSanitize]}
                       components={{
                         h1: ({ children }) => <h1 className="text-[20px] font-semibold tracking-[-0.02em] leading-6 text-[#191c1d] mt-10 mb-4 pb-3 border-b border-[#e8e9eb]">{children}</h1>,
                         h2: ({ children }) => <h2 className="text-[16px] font-semibold tracking-[-0.02em] leading-5 text-[#191c1d] mt-8 mb-4">{children}</h2>,
@@ -773,7 +786,7 @@ export default function App() {
                         code: ({ children }) => <code className="text-[13px] bg-[#f8f9fa] border border-[#e8e9eb] px-1.5 py-0.5 rounded font-normal text-[#191c1d]">{children}</code>,
                         pre: ({ children }) => <pre className="bg-[#f8f9fa] border border-[#e8e9eb] rounded-xl p-4 my-5 overflow-x-auto">{children}</pre>,
                         hr: () => <hr className="my-8 border-[#e8e9eb]" />,
-                        a: ({ children, href }) => <a href={href} className="text-[#2447b1] underline decoration-[#2447b1]/30 hover:decoration-[#2447b1] hover:text-[#1a3a8a] underline-offset-2" target="_blank" rel="noreferrer">{children}</a>,
+                        a: ({ children, href }) => <a href={href} className="text-[#2447b1] underline decoration-[#2447b1]/30 hover:decoration-[#2447b1] hover:text-[#1a3a8a] underline-offset-2" target="_blank" rel="noreferrer noopener">{children}</a>,
                       }}
                     >{displayMd}</ReactMarkdown>
                   </div>
@@ -796,7 +809,7 @@ export default function App() {
                       {selectedNotebook.analysisHistory.slice().reverse().map((h, i) => (
                         <div key={i} className="border border-[#e8e9eb] rounded-lg p-3">
                           <div className="flex justify-between text-[11px] text-[#46464a] mb-1"><span>{h.updatedAt}</span><span>{h.model}</span></div>
-                          <div className="text-xs text-[#46464a] line-clamp-3"><ReactMarkdown>{h.analysisMd?.slice(0, 600) + '...'}</ReactMarkdown></div>
+                          <div className="text-xs text-[#46464a] line-clamp-3"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{h.analysisMd?.slice(0, 600) + '...'}</ReactMarkdown></div>
                         </div>
                       ))}
                     </div>

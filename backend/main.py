@@ -25,13 +25,38 @@ load_dotenv()
 
 app = FastAPI(title="Consistem Sinapse API", version="2.0.0-sprint2-mvp")
 
-allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",") if os.getenv("CORS_ALLOWED_ORIGINS") != "*" else ["*"]
+_raw_cors = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").strip()
+if _raw_cors == "*":
+    # P0: nunca permitir * em produção — se AUTH não estiver desabilitado, falha no boot
+    if os.getenv("AUTH_DISABLED", "true").lower() != "true":
+        raise RuntimeError("CORS_ALLOWED_ORIGINS=* não permitido em produção com AUTH habilitado. Defina domínios exatos.")
+    allowed_origins = ["*"]
+else:
+    allowed_origins = [o.strip() for o in _raw_cors.split(",") if o.strip()]
+    if not allowed_origins:
+        allowed_origins = ["http://localhost:5173"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
+    max_age=600,
 )
+
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    resp = await call_next(request)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    # CSP básico: permite self + fonts/google + vercel insights
+    resp.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline' https://fonts.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://openrouter.ai"
+    if os.getenv("VERCEL_ENV") == "production" or os.getenv("ENV") == "production":
+        resp.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+    return resp
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-3-27b-it")
@@ -39,6 +64,45 @@ OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/ap
 OPENROUTER_SITE_URL = os.getenv("OPENROUTER_SITE_URL", "http://localhost:5173")
 OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "Consistem Sinapse GEM")
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
+
+# P0 Auth + Rate limit (memória) — para produção use Redis/Upstash
+API_KEY = os.getenv("API_KEY", "").strip()
+AUTH_DISABLED = os.getenv("AUTH_DISABLED", "true").lower() == "true"
+RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+_rate_store: dict[str, list[float]] = {}
+import time as _time
+from fastapi import Request
+
+def _check_auth(request: Request):
+    if AUTH_DISABLED:
+        return
+    # libera health sem auth
+    if request.url.path in ("/health", "/api/v1/health"):
+        return
+    key = request.headers.get("x-api-key") or request.query_params.get("api_key")
+    if not API_KEY or key != API_KEY:
+        raise HTTPException(status_code=401, detail="Não autorizado — X-API-Key inválida")
+
+def _check_rate(request: Request):
+    if RATE_LIMIT <= 0:
+        return
+    ip = request.client.host if request.client else "unknown"
+    now = _time.time()
+    bucket = _rate_store.setdefault(ip, [])
+    # janela 60s
+    bucket[:] = [t for t in bucket if now - t < 60]
+    if len(bucket) >= RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Muitas requisições — tente em 60s")
+    bucket.append(now)
+
+@app.middleware("http")
+async def _auth_rate_middleware(request: Request, call_next):
+    try:
+        _check_auth(request)
+        _check_rate(request)
+    except HTTPException as e:
+        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+    return await call_next(request)
 
 # P3-1: Jobs em memória para fila background
 _jobs: dict = {}
@@ -61,17 +125,39 @@ class UpdateNotebookPayload(BaseModel):
     title: str | None = None
     objective: str | None = None
 
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))
+ALLOWED_EXTS = {".pdf", ".md", ".txt", ".png", ".jpg", ".jpeg", ".webp"}
+def _is_safe_url(u: str) -> bool:
+    from urllib.parse import urlparse
+    try:
+        p = urlparse(u.strip())
+        if p.scheme not in ("http", "https"):
+            return False
+        if not p.netloc or p.netloc.startswith("localhost") or p.netloc.startswith("127.") or p.netloc == "0.0.0.0":
+            return False
+        # bloqueia IP privado básico
+        if p.hostname and (p.hostname.startswith("10.") or p.hostname.startswith("192.168.") or p.hostname.startswith("172.")):
+            return False
+        return True
+    except: return False
+
 async def extract_media_contents(files: list[UploadFile], site_url: str, youtube_url: str):
     """Extrai conteúdo de texto e imagens dos arquivos enviados e gera cópias temporárias para upload"""
     text_content = ""
     image_parts = []
     saved_temp_files = []
+    max_bytes = MAX_UPLOAD_MB * 1024 * 1024
 
     for file in files:
         contents = await file.read()
         if not contents:
             continue
+        if len(contents) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"Arquivo {file.filename} excede {MAX_UPLOAD_MB}MB")
         filename = (file.filename or "arquivo").lower()
+        ext = Path(filename).suffix.lower()
+        if ext not in ALLOWED_EXTS:
+            raise HTTPException(status_code=400, detail=f"Extensão {ext} não permitida. Use: {', '.join(sorted(ALLOWED_EXTS))}")
 
         # Salva arquivo temporário para anexo no NotebookLM
         suffix = Path(filename).suffix or ".bin"
@@ -114,6 +200,9 @@ async def extract_media_contents(files: list[UploadFile], site_url: str, youtube
         return parts
 
     for url in _split_urls(site_url):
+        if not _is_safe_url(url):
+            text_content += f"\n[ URL bloqueada por política de segurança: {url} ]\n"
+            continue
         try:
             downloaded = trafilatura.fetch_url(url)
             if downloaded:
@@ -124,6 +213,9 @@ async def extract_media_contents(files: list[UploadFile], site_url: str, youtube
             text_content += f"\n[ Falha ao raspar URL {url} ]\n"
 
     for yt in _split_urls(youtube_url):
+        if not _is_safe_url(yt):
+            text_content += f"\n[ URL YouTube bloqueada: {yt} ]\n"
+            continue
         if "v=" in yt or "youtu.be/" in yt:
             try:
                 video_id = ""
