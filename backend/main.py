@@ -118,8 +118,8 @@ def _check_auth(request: Request):
     # preflight nunca exige auth
     if request.method == "OPTIONS":
         return
-    # libera health sem auth
-    if request.url.path in ("/health", "/api/v1/health"):
+    # libera health e auth sem X-API-Key (login precisa ser público)
+    if request.url.path in ("/health", "/api/v1/health") or request.url.path.startswith("/api/v1/auth/"):
         return
     key = request.headers.get("x-api-key") or request.headers.get("X-API-Key") or request.query_params.get("api_key")
     if not API_KEY or key != API_KEY:

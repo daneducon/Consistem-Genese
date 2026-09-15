@@ -57,8 +57,8 @@ export default function Login({ onLogin }) {
     try {
       const r = await fetch(`${API_BASE}/api/v1/auth/google`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...(localStorage.getItem('genese_token') ? {} : {}) },
+        credentials: 'omit',
         body: JSON.stringify({ id_token }),
       });
       const j = await r.json().catch(() => ({}));
