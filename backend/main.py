@@ -76,10 +76,13 @@ from fastapi import Request
 def _check_auth(request: Request):
     if AUTH_DISABLED:
         return
+    # preflight nunca exige auth
+    if request.method == "OPTIONS":
+        return
     # libera health sem auth
     if request.url.path in ("/health", "/api/v1/health"):
         return
-    key = request.headers.get("x-api-key") or request.query_params.get("api_key")
+    key = request.headers.get("x-api-key") or request.headers.get("X-API-Key") or request.query_params.get("api_key")
     if not API_KEY or key != API_KEY:
         raise HTTPException(status_code=401, detail="Não autorizado — X-API-Key inválida")
 
@@ -97,11 +100,25 @@ def _check_rate(request: Request):
 
 @app.middleware("http")
 async def _auth_rate_middleware(request: Request, call_next):
+    # deixa o CORS lidar com preflight antes de auth
+    if request.method == "OPTIONS":
+        return await call_next(request)
     try:
         _check_auth(request)
         _check_rate(request)
     except HTTPException as e:
-        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+        # adiciona CORS mesmo no 401/429 para o browser não bloquear por falta de header
+        resp = JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+        origin = request.headers.get("origin", "")
+        # reflete origin se estiver na allowlist (ou * se permitido)
+        if allowed_origins == ["*"]:
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+        elif origin in allowed_origins:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-API-Key"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        return resp
     return await call_next(request)
 
 # P3-1: Jobs em memória para fila background
