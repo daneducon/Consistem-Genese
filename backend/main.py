@@ -72,6 +72,44 @@ RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
 _rate_store: dict[str, list[float]] = {}
 import time as _time
 from fastapi import Request
+# OAuth / JWT
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-me")
+JWT_EXPIRES_IN = os.getenv("JWT_EXPIRES_IN", "7d")
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+GOOGLE_WORKSPACE_DOMAIN = os.getenv("GOOGLE_WORKSPACE_DOMAIN", "").strip()
+
+def _parse_expires(s: str) -> int:
+    s = s.strip().lower()
+    if s.endswith("d"): return int(s[:-1]) * 86400
+    if s.endswith("h"): return int(s[:-1]) * 3600
+    if s.endswith("m"): return int(s[:-1]) * 60
+    try: return int(s)
+    except: return 7*86400
+
+import jwt as _jwt
+def _create_jwt(sub: str, email: str, name: str = "", picture: str = "") -> str:
+    exp = int(_time.time()) + _parse_expires(JWT_EXPIRES_IN)
+    payload = {"sub": sub, "email": email, "name": name, "picture": picture, "iat": int(_time.time()), "exp": exp}
+    return _jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+def _verify_jwt(token: str) -> dict | None:
+    try:
+        return _jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except Exception:
+        return None
+
+def _get_user_from_request(request: Request) -> dict | None:
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:].strip()
+        data = _verify_jwt(token)
+        if data: return data
+    # fallback cookie
+    tok = request.cookies.get("genese_token")
+    if tok:
+        data = _verify_jwt(tok)
+        if data: return data
+    return None
 
 def _check_auth(request: Request):
     if AUTH_DISABLED:
@@ -319,6 +357,57 @@ async def health():
         "version": "2.0.0-sprint2-mvp"
     }
 
+# --- GOOGLE OAUTH (apenas id_token via GIS) ---
+class GoogleAuthPayload(BaseModel):
+    id_token: str
+
+@app.post("/api/v1/auth/google")
+async def auth_google(payload: GoogleAuthPayload, request: Request):
+    """Verifica id_token do Google (GIS) e emite JWT httpOnly"""
+    if not GOOGLE_OAUTH_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="GOOGLE_OAUTH_CLIENT_ID não configurado")
+    # verifica via google tokeninfo (sem lib extra) + valida aud/domínio
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get("https://oauth2.googleapis.com/tokeninfo", params={"id_token": payload.id_token})
+            if r.status_code != 200:
+                raise HTTPException(status_code=401, detail="id_token inválido")
+            info = r.json()
+            if info.get("aud") != GOOGLE_OAUTH_CLIENT_ID:
+                raise HTTPException(status_code=401, detail="aud mismatch")
+            email = info.get("email", "")
+            if not email or not info.get("email_verified") == "true":
+                raise HTTPException(status_code=401, detail="email não verificado")
+            if GOOGLE_WORKSPACE_DOMAIN and not email.lower().endswith(f"@{GOOGLE_WORKSPACE_DOMAIN.lower()}"):
+                raise HTTPException(status_code=403, detail=f"Acesso restrito a @{GOOGLE_WORKSPACE_DOMAIN}")
+            sub = info.get("sub") or email
+            name = info.get("name") or email.split("@")[0]
+            picture = info.get("picture", "")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Falha ao validar Google: {e}")
+    token = _create_jwt(sub, email, name, picture)
+    # httpOnly cookie + retorna também no body para SPA
+    resp = JSONResponse(content={"token": token, "user": {"sub": sub, "email": email, "name": name, "picture": picture}})
+    # cookie seguro apenas em produção (https)
+    is_prod = os.getenv("ENV") == "production" or os.getenv("VERCEL_ENV") == "production"
+    resp.set_cookie("genese_token", token, httponly=True, secure=is_prod, samesite="lax", max_age=_parse_expires(JWT_EXPIRES_IN), path="/")
+    return resp
+
+@app.get("/api/v1/auth/me")
+async def auth_me(request: Request):
+    user = _get_user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Não autenticado")
+    return {"user": user}
+
+@app.post("/api/v1/auth/logout")
+async def auth_logout():
+    resp = JSONResponse(content={"status": "ok"})
+    resp.delete_cookie("genese_token", path="/")
+    return resp
+
 @app.get("/api/v1/sync/status")
 async def sync_status():
     """Retorna último sync e status do NotebookLM"""
@@ -347,7 +436,7 @@ async def sync_status():
     return {"last_sync": last_sync or "nunca", "notebooklm_ready": nblm_ready, "live_ok": live_ok, "msg": nblm_msg, "error": live_err}
 
 @app.post("/api/v1/notebooks/sync")
-async def sync_notebooks():
+async def sync_notebooks(request: Request):
     """Força sincronização com Google NotebookLM - leve, só lista (não busca fontes de cada)"""
     import json, time
     from pathlib import Path
@@ -369,12 +458,14 @@ async def sync_notebooks():
             last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time()))
         return {"synced": len(google_nbs), "count": len(google_nbs), "last_sync": last, "cached": True, "warning": "Sincronização em cache — sessão do Google expirada. Rode py -m notebooklm login para atualizar."}
     # live fresco: só garante que store tem entrada, não busca fontes (grid só precisa de sources_count da listagem)
+    user = _get_user_from_request(request)
+    owner = user["sub"] if user else ""
     synced = 0
     for nb in google_nbs:
         nid = nb["id"]
         meta = store.get_notebook_meta(nid)
         if not meta:
-            store.save_notebook_meta(nid, nb["title"], "Caderno importado da Conta Google", "", [])
+            store.save_notebook_meta(nid, nb["title"], "Caderno importado da Conta Google", "", [], owner=owner)
         elif meta.get("title") != nb["title"]:
             store.update_notebook_meta(nid, title=nb["title"])
         synced += 1
@@ -385,9 +476,14 @@ async def sync_notebooks():
 # ==============================================================================
 
 @app.get("/api/v1/notebooks")
-async def list_notebooks():
-    """Lista todos os cadernos com metadados e contagem de fontes"""
+async def list_notebooks(request: Request):
+    """Lista todos os cadernos com metadados e contagem de fontes — filtra por owner (JWT) se logado"""
+    user = _get_user_from_request(request)
+    owner = user["sub"] if user else None
     local_store = store.get_all_notebooks_meta()
+    # filtra por owner se logado (Fase 1: notebooks com owner vazio são visíveis para compat)
+    if owner:
+        local_store = {k: v for k, v in local_store.items() if not v.get("owner") or v.get("owner") == owner}
     
     # Busca cadernos do Google NotebookLM se disponível
     google_nbs = await mvp_nblm.list_google_notebooks()
@@ -424,14 +520,14 @@ async def list_notebooks():
                 "sources": [],
                 "google_notebook_url": g_nb.get("url") or f"https://notebooklm.google.com/notebook/{g_id}"
             }
-            # Salva no store para consistência
-            store.save_notebook_meta(g_id, entry["title"], entry["objective"], "")
+            # Salva no store para consistência com owner
+            store.save_notebook_meta(g_id, entry["title"], entry["objective"], "", owner=owner)
             result.append(entry)
 
     return result
 
 @app.get("/api/v1/notebooks/{notebook_id}")
-async def get_notebook(notebook_id: str):
+async def get_notebook(notebook_id: str, request: Request):
     """Busca detalhes e fontes atualizadas de um caderno específico"""
     meta = store.get_notebook_meta(notebook_id) or {}
     
@@ -462,6 +558,7 @@ async def get_notebook(notebook_id: str):
 
 @app.post("/api/v1/notebooks/create-and-analyze")
 async def create_and_analyze(
+    request: Request,
     project_title: str = Form(...),
     project_objective: str = Form(default=""),
     files: list[UploadFile] = File(default=[]),
@@ -524,13 +621,16 @@ Gere o diagnóstico completo do processo, recomendação das ferramentas de entr
         analysis_md = f"# Pré-Diagnóstico: {project_title}\n\n## Objetivo Declarado\n{project_objective}\n\n## Fontes Vinculadas\n- {len(added_sources)} materiais anexados ao caderno.\n\n> Configure OPENROUTER_API_KEY para habilitar a inferência completa com Gemma."
 
     # 4. Salva metadados localmente (P1-2 + P2-7: guarda contexto textual para re-análise)
+    user = _get_user_from_request(request)
+    owner = user["sub"] if user else ""
     saved = store.save_notebook_meta(
         notebook_id=notebook_id,
         title=project_title.strip(),
         objective=project_objective.strip(),
         analysis_md=analysis_md,
         sources=added_sources,
-        text_context=text_data[:20000]
+        text_context=text_data[:20000],
+        owner=owner
     )
 
     return {

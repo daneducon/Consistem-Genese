@@ -40,7 +40,7 @@ def get_notebook_meta(notebook_id: str) -> dict | None:
     store = _load_store()
     return store.get(notebook_id)
 
-def save_notebook_meta(notebook_id: str, title: str, objective: str = "", analysis_md: str = "", sources: list = None, text_context: str = None) -> dict:
+def save_notebook_meta(notebook_id: str, title: str, objective: str = "", analysis_md: str = "", sources: list = None, text_context: str = None, owner: str = None) -> dict:
     store = _load_store()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     
@@ -61,7 +61,8 @@ def save_notebook_meta(notebook_id: str, title: str, objective: str = "", analys
         "sources": sources if sources is not None else current.get("sources", []),
         "analysisHistory": history,
         "lastModel": current.get("lastModel", ""),
-        "textContext": text_context if text_context is not None else current.get("textContext", "")
+        "textContext": text_context if text_context is not None else current.get("textContext", ""),
+        "owner": owner if owner is not None else current.get("owner", ""),
     }
     if analysis_md is not None:
         from os import getenv
@@ -70,10 +71,10 @@ def save_notebook_meta(notebook_id: str, title: str, objective: str = "", analys
     _save_store(store)
     return entry
 
-def update_notebook_meta(notebook_id: str, title: str = None, objective: str = None, analysis_md: str = None, sources: list = None, text_context: str = None) -> dict | None:
+def update_notebook_meta(notebook_id: str, title: str = None, objective: str = None, analysis_md: str = None, sources: list = None, text_context: str = None, owner: str = None) -> dict | None:
     store = _load_store()
     if notebook_id not in store:
-        return save_notebook_meta(notebook_id, title or "Sem título", objective or "", analysis_md or "", sources or [], text_context)
+        return save_notebook_meta(notebook_id, title or "Sem título", objective or "", analysis_md or "", sources or [], text_context, owner)
     
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     if title is not None:
@@ -93,6 +94,8 @@ def update_notebook_meta(notebook_id: str, title: str = None, objective: str = N
         store[notebook_id]["sources"] = sources
     if text_context is not None:
         store[notebook_id]["textContext"] = text_context
+    if owner is not None:
+        store[notebook_id]["owner"] = owner
     store[notebook_id]["updatedAt"] = now_str
     
     _save_store(store)

@@ -4,16 +4,23 @@ import rehypeSanitize from 'rehype-sanitize';
 import { GridSkeleton, SourcesSkeleton, MarkdownSkeleton } from './components/Skeleton';
 import Tooltip from './components/Tooltip';
 import InlineSpinner from './components/InlineSpinner';
+import Login from './pages/Login.jsx';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
 const API_KEY = import.meta.env.VITE_API_KEY || '';
-const apiHeaders = (extra = {}) => {
-  const h = { ...extra };
+const getAuthHeaders = () => {
+  const h = {};
+  try { const t = localStorage.getItem('genese_token'); if (t) h['Authorization'] = `Bearer ${t}`; } catch {}
   if (API_KEY) h['X-API-Key'] = API_KEY;
+  return h;
+};
+const apiHeaders = (extra = {}) => {
+  const h = { ...extra, ...getAuthHeaders() };
   return h;
 };
 const apiFetch = (url, opts = {}) => {
   opts.headers = apiHeaders(opts.headers || {});
+  opts.credentials = opts.credentials || 'include';
   return fetch(url, opts);
 };
 
@@ -52,6 +59,8 @@ export default function App() {
   const [searchInput, setSearchInput] = useState(() => localStorage.getItem('genese_search') || '');
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' ? !navigator.onLine : false);
+  const [user, setUser] = useState(() => { try { return JSON.parse(localStorage.getItem('genese_user') || 'null'); } catch { return null; } });
+  const [authChecked, setAuthChecked] = useState(false);
 
   const [dragActiveCreate, setDragActiveCreate] = useState(false);
   const [dragActiveAppend, setDragActiveAppend] = useState(false);
@@ -194,6 +203,25 @@ export default function App() {
     window.addEventListener('offline', onOffline);
     return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
   }, []);
+
+  // verifica sessão JWT ao carregar
+  useEffect(() => {
+    const token = (() => { try { return localStorage.getItem('genese_token'); } catch { return null; } })();
+    if (!token) { setAuthChecked(true); return; }
+    apiFetch(`${API_BASE}/api/v1/auth/me`).then(r => r.ok ? r.json() : Promise.reject()).then(j => {
+      setUser(j.user); try { localStorage.setItem('genese_user', JSON.stringify(j.user)); } catch {}
+    }).catch(() => {
+      try { localStorage.removeItem('genese_token'); localStorage.removeItem('genese_user'); } catch {}
+      setUser(null);
+    }).finally(() => setAuthChecked(true));
+  }, []);
+
+  const handleLogout = async () => {
+    try { await apiFetch(`${API_BASE}/api/v1/auth/logout`, { method: 'POST' }); } catch {}
+    try { localStorage.removeItem('genese_token'); localStorage.removeItem('genese_user'); } catch {}
+    setUser(null); setSelectedNotebook(null);
+  };
+  const handleLogin = (u) => { setUser(u); setAuthChecked(true); };
 
   // atalho / para focar busca e Esc para limpar (como na imagem Nexus)
   useEffect(() => {
@@ -570,6 +598,13 @@ export default function App() {
     return t;
   }, [selectedNotebook?.analysisMd]);
 
+  if (!authChecked) {
+    return <div className="min-h-screen flex items-center justify-center bg-[#f8f9fa]"><div className="w-6 h-6 border-2 border-[#2e2e30] border-t-transparent rounded-full animate-spin" aria-label="Carregando"></div></div>;
+  }
+  if (!user) {
+    return <Login onLogin={handleLogin} />;
+  }
+
   return (
     <div className="min-h-screen bg-[#f8f9fa] text-[#191c1d] font-['DM_Sans'] selection:bg-[#2e2e30] selection:text-white">
       <div className="max-w-[1280px] mx-auto px-4 md:px-10">
@@ -620,6 +655,14 @@ export default function App() {
               <button onClick={() => setSelectedNotebook(null)} className="px-4 h-9 bg-[#f8f9fa] hover:bg-white border border-[#e8e9eb] rounded-full text-xs font-medium text-[#191c1d] transition-colors">Voltar</button>
             )}
             <button onClick={() => { resetForm(); setIsCreateModalOpen(true); }} className="h-9 px-5 bg-[#df5241] hover:bg-[#c84434] text-white rounded-full text-xs font-medium shadow-[0_2px_10px_rgba(223,82,65,0.2)] hover:shadow-[0_4px_16px_rgba(223,82,65,0.28)] transition-all">Criar novo caderno</button>
+            <div className="hidden sm:flex items-center gap-2 ml-1 pl-2 border-l border-[#e8e9eb]">
+              {user?.picture && <img src={user.picture} alt={user.name} referrerPolicy="no-referrer" className="w-7 h-7 rounded-full border border-[#e8e9eb]" />}
+              <div className="hidden lg:block leading-none">
+                <p className="text-xs font-medium text-[#191c1d] leading-none truncate max-w-[120px]">{user?.name || user?.email}</p>
+                <p className="text-[11px] text-[#46464a] leading-none truncate max-w-[120px]">{user?.email}</p>
+              </div>
+              <button onClick={handleLogout} className="ml-1 px-3 py-1.5 text-xs text-[#46464a] hover:text-[#191c1d] rounded-full hover:bg-[#f8f9fa]">Sair</button>
+            </div>
           </div>
         </header>
 
