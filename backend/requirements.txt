@@ -8,7 +8,7 @@ trafilatura==1.12.0
 youtube-transcript-api==0.6.2
 httpx==0.27.2
 
-# MVP NotebookLM (NotebookLM + Sync) — opcional, instalar via: pip install -r requirements.txt && playwright install chromium
-notebooklm-py[browser]>=0.9.0
-playwright>=1.40.0
+# MVP NotebookLM (NotebookLM + Sync) — Vercel tem 0.8.2 como máx (py3.12), use 0.8.x compatível
+notebooklm-py[browser]==0.8.2
+playwright==1.48.0
 # Opcional — backend Android (sem browser, usa master_token): pip install "notebooklm-py[android,browser]"
