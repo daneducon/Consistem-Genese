@@ -6,8 +6,5 @@
     "PYTHON_VERSION": "3.11",
     "USE_NOTEBOOKLM": "true",
     "NOTEBOOKLM_TIMEOUT_S": "9"
-  },
-  "functions": {
-    "api/index.py": { "maxDuration": 25, "memory": 1024 }
   }
 }
