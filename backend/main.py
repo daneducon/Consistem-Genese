@@ -8,6 +8,7 @@ import asyncio
 import tempfile
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -22,6 +23,20 @@ import mvp_notebooklm as mvp_nblm
 import notebooks_store as store
 
 load_dotenv()
+
+# Horário exibido ao usuário: servidor Vercel roda em UTC, usuário em UTC-3.
+# TZ_DISPLAY permite override (ex: America/Sao_Paulo é o padrão).
+try:
+    _DISPLAY_TZ = ZoneInfo(os.getenv("TZ_DISPLAY", "America/Sao_Paulo"))
+except Exception:
+    from datetime import timezone as _tz
+    _DISPLAY_TZ = _tz.utc
+
+def _now_display(fmt: str = "%d/%m/%Y-%H:%M") -> str:
+    return datetime.now(_DISPLAY_TZ).strftime(fmt)
+
+def _ts_display(ts: float, fmt: str = "%d/%m/%Y-%H:%M") -> str:
+    return datetime.fromtimestamp(ts, _DISPLAY_TZ).strftime(fmt)
 
 app = FastAPI(title="Consistem Gênese API", version="2.0.0-sprint2-mvp")
 
@@ -178,7 +193,7 @@ _jobs: dict = {}
 _jobs_lock = asyncio.Lock() if False else None  # placeholder, usará dict simples com thread safety via asyncio
 
 def _job_now():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return _now_display("%Y-%m-%d %H:%M:%S")
 
 def _create_job(job_type: str) -> str:
     jid = f"job_{uuid.uuid4().hex[:12]}"
@@ -438,7 +453,7 @@ async def sync_status():
         try:
             j = json.loads(cache_path.read_text(encoding="utf-8"))
             ts = j.get("ts", 0)
-            last_sync = time.strftime("%d/%m/%Y-%H:%M", time.localtime(ts))
+            last_sync = _ts_display(ts)
             cached_count = len(j.get("data", []))
         except Exception:
             pass
@@ -549,9 +564,9 @@ async def sync_notebooks(request: Request):
     if not google_nbs:
         try:
             j = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
-            last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(j.get("ts", time.time())))
+            last = _ts_display(j.get("ts") or time.time())
         except Exception:
-            last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time()))
+            last = _now_display()
         return {"synced": 0, "count": local_count, "last_sync": last, "cached": True, "live": False, "mode": "cache", "error": err_msg or "NotebookLM indisponível — usando cache local"}
     after_mtime = cache_path.stat().st_mtime if cache_path.exists() else 0
     # Na Vercel /tmp é efêmero: before_mtime==0 não significa live. Só é live se não houve erro.
@@ -559,9 +574,9 @@ async def sync_notebooks(request: Request):
     if is_cached:
         try:
             j = json.loads(cache_path.read_text(encoding="utf-8"))
-            last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(j.get("ts", time.time())))
+            last = _ts_display(j.get("ts") or time.time())
         except Exception:
-            last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time()))
+            last = _now_display()
         return {"synced": len(google_nbs), "count": len(google_nbs), "last_sync": last, "cached": True, "live": False, "mode": "cache", "error": err_msg}
     # live fresco: só garante que store tem entrada, não busca fontes
     owner = me.get("sub", "") if me else ""
@@ -577,7 +592,7 @@ async def sync_notebooks(request: Request):
             synced += 1
         except Exception:
             continue
-    return {"synced": synced, "count": len(google_nbs), "last_sync": time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time())), "cached": False, "live": True, "mode": "live", "error": None}
+    return {"synced": synced, "count": len(google_nbs), "last_sync": _now_display(), "cached": False, "live": True, "mode": "live", "error": None}
 
 # ==============================================================================
 # TELA 1: GRID & CADERNOS

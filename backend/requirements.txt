@@ -9,6 +9,8 @@ youtube-transcript-api==0.6.2
 httpx==0.27.2
 PyJWT==2.9.0
 google-auth==2.40.0
+# Banco IANA p/ zoneinfo (Windows não tem tzdata do sistema; Vercel/Linux já tem)
+tzdata
 
 # MVP NotebookLM (NotebookLM + Sync) — Vercel tem 0.8.2 como máx (py3.12), use 0.8.x compatível
 # headless (gpsoauth) é obrigatório: sem ele o `auth refresh` não re-minta cookie do master_token na Vercel

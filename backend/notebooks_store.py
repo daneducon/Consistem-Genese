@@ -4,6 +4,15 @@ import tempfile
 import threading
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+def _now_str(fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Horário de exibição (servidor em UTC, usuário em SP por padrão)."""
+    try:
+        tz = ZoneInfo(os.getenv("TZ_DISPLAY", "America/Sao_Paulo"))
+    except Exception:
+        tz = None
+    return datetime.now(tz).strftime(fmt) if tz else datetime.now().strftime(fmt)
 
 # Vercel serverless: /var/task é read-only — store vai para /tmp (efêmero por
 # instância; dados live são reconstruídos do Google a cada listagem).
@@ -47,7 +56,7 @@ def get_notebook_meta(notebook_id: str) -> dict | None:
 
 def save_notebook_meta(notebook_id: str, title: str, objective: str = "", analysis_md: str = "", sources: list = None, text_context: str = None, owner: str = None) -> dict:
     store = _load_store()
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_str = _now_str()
     
     current = store.get(notebook_id, {})
     # P2-7: histórico versionado
@@ -81,7 +90,7 @@ def update_notebook_meta(notebook_id: str, title: str = None, objective: str = N
     if notebook_id not in store:
         return save_notebook_meta(notebook_id, title or "Sem título", objective or "", analysis_md or "", sources or [], text_context, owner)
     
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_str = _now_str()
     if title is not None:
         store[notebook_id]["title"] = title
     if objective is not None:

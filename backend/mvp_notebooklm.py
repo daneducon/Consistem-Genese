@@ -43,7 +43,12 @@ def _record_sync_error(e: Exception) -> str:
         msg = msg[:300]
     _last_sync_error = msg
     try:
-        _last_sync_error_at = datetime.now().strftime("%d/%m/%Y-%H:%M")
+        from zoneinfo import ZoneInfo as _ZI
+        try:
+            _tz = _ZI(os.getenv("TZ_DISPLAY", "America/Sao_Paulo"))
+        except Exception:
+            _tz = None
+        _last_sync_error_at = datetime.now(_tz).strftime("%d/%m/%Y-%H:%M") if _tz else datetime.now().strftime("%d/%m/%Y-%H:%M")
     except Exception:
         _last_sync_error_at = None
     return msg
