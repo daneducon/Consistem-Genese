@@ -553,7 +553,7 @@ export default function App() {
   }, [selectedNotebook?.sources, sourcesPage]);
   const hasMoreSources = (selectedNotebook?.sources?.length || 0) > paginatedSources.length;
 
-  const suggestionChips = ['Cadastro de Engenharia', 'Guia do Conteudista', 'Onboarding Comercial Sinapse'];
+  const suggestionChips = ['Cadastro de Engenharia', 'Guia do Conteudista', 'Onboarding Comercial Gênese'];
 
   // Normaliza markdown do GEM para dar respiro: negritos "Contexto Geral:" viram headings
   const displayMd = React.useMemo(() => {

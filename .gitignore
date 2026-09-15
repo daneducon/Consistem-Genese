@@ -49,3 +49,5 @@ Desktop.ini
 
 # Build
 .vite/
+
+.vercel

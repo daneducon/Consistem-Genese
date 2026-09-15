@@ -1,4 +1,4 @@
-# mvp_notebooklm.py — Wrapper NotebookLM-Py para Consistem Sinapse
+# mvp_notebooklm.py — Wrapper NotebookLM-Py para Consistem Gênese
 # Lib: https://github.com/teng-lin/notebooklm-py
 import os
 import tempfile

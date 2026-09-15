@@ -1,4 +1,4 @@
-# main.py - FastAPI Orchestrator (Consistem Sinapse GEM)
+# main.py - FastAPI Orchestrator (Consistem Gênese)
 import os
 import io
 import uuid
@@ -23,7 +23,7 @@ import notebooks_store as store
 
 load_dotenv()
 
-app = FastAPI(title="Consistem Sinapse API", version="2.0.0-sprint2-mvp")
+app = FastAPI(title="Consistem Gênese API", version="2.0.0-sprint2-mvp")
 
 _raw_cors = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").strip()
 if _raw_cors == "*":
@@ -62,7 +62,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-3-27b-it")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_SITE_URL = os.getenv("OPENROUTER_SITE_URL", "http://localhost:5173")
-OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "Consistem Sinapse GEM")
+OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "Consistem Gênese")
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
 
 # P0 Auth + Rate limit (memória) — para produção use Redis/Upstash
