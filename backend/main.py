@@ -112,6 +112,19 @@ def _get_user_from_request(request: Request) -> dict | None:
         if data: return data
     return None
 
+def _require_user(request: Request) -> dict:
+    # se OAuth configurado, exige login para notebooks (Fase 2)
+    if GOOGLE_OAUTH_CLIENT_ID:
+        user = _get_user_from_request(request)
+        if not user:
+            raise HTTPException(status_code=401, detail="Não autenticado — faça login com Google")
+        # valida domínio novamente
+        if GOOGLE_WORKSPACE_DOMAIN and not user.get("email","").lower().endswith(f"@{GOOGLE_WORKSPACE_DOMAIN.lower()}"):
+            raise HTTPException(status_code=403, detail=f"Acesso restrito a @{GOOGLE_WORKSPACE_DOMAIN}")
+        return user
+    # sem OAuth, permite anônimo (compat)
+    return _get_user_from_request(request) or {"sub": "", "email": ""}
+
 def _check_auth(request: Request):
     if AUTH_DISABLED:
         return
@@ -439,6 +452,7 @@ async def sync_status():
 @app.post("/api/v1/notebooks/sync")
 async def sync_notebooks(request: Request):
     """Força sincronização com Google NotebookLM - leve, só lista (não busca fontes de cada)"""
+    _require_user(request)
     import json, time
     from pathlib import Path
     cache_path = Path(__file__).parent / "data" / "google_notebooks_cache.json"
@@ -448,7 +462,15 @@ async def sync_notebooks(request: Request):
     except: pass
     google_nbs = await mvp_nblm.list_google_notebooks()
     if not google_nbs:
-        raise HTTPException(status_code=401, detail="Sessão do Google expirada. No terminal rode: py -m notebooklm login e tente novamente.")
+        # Fase 2: em produção (Vercel) NotebookLM não tem storage_state — não falha, apenas retorna cache local
+        try:
+            j = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
+            last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(j.get("ts", time.time())))
+        except:
+            last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time()))
+        # tenta retornar notebooks do store local como fallback
+        local_count = len([k for k, v in store.get_all_notebooks_meta().items() if not v.get("owner") or v.get("owner") == _get_user_from_request(request).get("sub","")]) if _get_user_from_request(request) else 0
+        return {"synced": 0, "count": local_count, "last_sync": last, "cached": True, "warning": "NotebookLM não disponível em produção — exibindo cadernos locais. Rode notebooklm login localmente para sincronizar."}
     after_mtime = cache_path.stat().st_mtime if cache_path.exists() else 0
     is_cached = before_mtime != 0 and before_mtime == after_mtime
     if is_cached:
@@ -478,11 +500,11 @@ async def sync_notebooks(request: Request):
 
 @app.get("/api/v1/notebooks")
 async def list_notebooks(request: Request):
-    """Lista todos os cadernos com metadados e contagem de fontes — filtra por owner (JWT) se logado"""
-    user = _get_user_from_request(request)
-    owner = user["sub"] if user else None
+    """Lista todos os cadernos com metadados e contagem de fontes — filtra por owner (JWT) se logado (Fase 2)"""
+    user = _require_user(request)
+    owner = user.get("sub") if user.get("sub") else None
     local_store = store.get_all_notebooks_meta()
-    # filtra por owner se logado (Fase 1: notebooks com owner vazio são visíveis para compat)
+    # Fase 2: isolamento por owner (compat: legacy sem owner visível para facilitar migração)
     if owner:
         local_store = {k: v for k, v in local_store.items() if not v.get("owner") or v.get("owner") == owner}
     
@@ -530,7 +552,11 @@ async def list_notebooks(request: Request):
 @app.get("/api/v1/notebooks/{notebook_id}")
 async def get_notebook(notebook_id: str, request: Request):
     """Busca detalhes e fontes atualizadas de um caderno específico"""
+    user = _require_user(request)
     meta = store.get_notebook_meta(notebook_id) or {}
+    # verifica owner
+    if meta.get("owner") and meta.get("owner") != user.get("sub"):
+        raise HTTPException(status_code=404, detail="Caderno não encontrado")
     
     # Tenta buscar fontes atualizadas do NotebookLM
     live_sources = await mvp_nblm.get_notebook_sources(notebook_id)
@@ -650,8 +676,12 @@ Gere o diagnóstico completo do processo, recomendação das ferramentas de entr
 # ==============================================================================
 
 @app.put("/api/v1/notebooks/{notebook_id}")
-async def update_notebook(notebook_id: str, payload: UpdateNotebookPayload):
+async def update_notebook(notebook_id: str, request: Request, payload: UpdateNotebookPayload):
     """Edita título e objetivo do caderno"""
+    user = _require_user(request)
+    meta = store.get_notebook_meta(notebook_id)
+    if meta and meta.get("owner") and meta.get("owner") != user.get("sub"):
+        raise HTTPException(status_code=404, detail="Caderno não encontrado")
     updated = store.update_notebook_meta(
         notebook_id=notebook_id,
         title=payload.title,
@@ -666,8 +696,12 @@ async def update_notebook(notebook_id: str, payload: UpdateNotebookPayload):
     return updated
 
 @app.delete("/api/v1/notebooks/{notebook_id}")
-async def delete_notebook(notebook_id: str):
+async def delete_notebook(notebook_id: str, request: Request):
     """Exclui caderno no store e no Google NotebookLM"""
+    user = _require_user(request)
+    meta = store.get_notebook_meta(notebook_id)
+    if meta and meta.get("owner") and meta.get("owner") != user.get("sub"):
+        raise HTTPException(status_code=404, detail="Caderno não encontrado")
     deleted = store.delete_notebook_meta(notebook_id)
     await mvp_nblm.delete_google_notebook(notebook_id)
     return {"status": "success", "notebook_id": notebook_id, "deleted": deleted}
@@ -678,13 +712,17 @@ async def delete_notebook(notebook_id: str):
 
 @app.post("/api/v1/notebooks/{notebook_id}/append")
 async def append_sources(
+    request: Request,
     notebook_id: str,
     files: list[UploadFile] = File(default=[]),
     site_url: str = Form(default=""),
     youtube_url: str = Form(default="")
 ):
     """Anexa novas fontes ao caderno ativo (RF-02)"""
+    user = _require_user(request)
     current = store.get_notebook_meta(notebook_id)
+    if current and current.get("owner") and current.get("owner") != user.get("sub"):
+        raise HTTPException(status_code=404, detail="Caderno não encontrado")
     if not current:
         raise HTTPException(status_code=404, detail="Caderno não encontrado")
 
@@ -732,9 +770,12 @@ async def append_sources(
     }
 
 @app.post("/api/v1/notebooks/{notebook_id}/reanalyze")
-async def reanalyze_notebook(notebook_id: str):
+async def reanalyze_notebook(notebook_id: str, request: Request):
     """Reexecuta o diagnóstico GEM a partir de todas as fontes disponíveis (RF-04) - P1-2 contexto real"""
+    user = _require_user(request)
     current = store.get_notebook_meta(notebook_id)
+    if current and current.get("owner") and current.get("owner") != user.get("sub"):
+        raise HTTPException(status_code=404, detail="Caderno não encontrado")
     if not current:
         raise HTTPException(status_code=404, detail="Caderno não encontrado")
 
@@ -778,7 +819,7 @@ Com base na evolução e nos novos materiais acumulados neste caderno, gere a an
 # ==============================================================================
 # P3-1: FILA BACKGROUND + STREAMING (jobs)
 # ==============================================================================
-async def _run_create_job(jid: str, project_title: str, project_objective: str, files_data: list, site_url: str, youtube_url: str):
+async def _run_create_job(jid: str, project_title: str, project_objective: str, files_data: list, site_url: str, youtube_url: str, owner: str = ""):
     try:
         _update_job(jid, status="running", progress=10, message="Extraindo conteúdo dos arquivos...")
         # recria UploadFile structure para extract
@@ -845,7 +886,7 @@ async def _run_create_job(jid: str, project_title: str, project_objective: str, 
                 analysis_md = f"# Pré-Diagnóstico: {project_title}\n\n*Fallback erro: {e}*\n\n## Objetivo\n{project_objective}"
         else:
             analysis_md = f"# Pré-Diagnóstico: {project_title}\n\n## Objetivo\n{project_objective}\n\nConfigure OPENROUTER_API_KEY."
-        saved = store.save_notebook_meta(notebook_id, project_title.strip(), project_objective.strip(), analysis_md, added_sources, text_data[:20000])
+        saved = store.save_notebook_meta(notebook_id, project_title.strip(), project_objective.strip(), analysis_md, added_sources, text_data[:20000], owner=owner)
         _update_job(jid, status="done", progress=100, message="Concluído", result={"id": notebook_id, "title": saved["title"], "objective": saved["objective"], "sourcesCount": len(added_sources), "updatedAt": saved["updatedAt"], "analysisMd": analysis_md, "sources": added_sources, "google_notebook_url": google_url})
     except Exception as e:
         _update_job(jid, status="error", message=str(e), error=str(e))
@@ -874,7 +915,8 @@ async def _run_reanalyze_job(jid: str, notebook_id: str):
         _update_job(jid, status="error", message=str(e), error=str(e))
 
 @app.post("/api/v1/notebooks/create-and-analyze-async")
-async def create_and_analyze_async(background_tasks: BackgroundTasks, project_title: str = Form(...), project_objective: str = Form(default=""), files: list[UploadFile] = File(default=[]), site_url: str = Form(default=""), youtube_url: str = Form(default="")):
+async def create_and_analyze_async(request: Request, background_tasks: BackgroundTasks, project_title: str = Form(...), project_objective: str = Form(default=""), files: list[UploadFile] = File(default=[]), site_url: str = Form(default=""), youtube_url: str = Form(default="")):
+    user = _require_user(request)
     if not project_title.strip():
         raise HTTPException(status_code=400, detail="Nome do Caderno é obrigatório")
     # lê bytes agora (UploadFile não sobrevive ao background)
@@ -884,11 +926,15 @@ async def create_and_analyze_async(background_tasks: BackgroundTasks, project_ti
         if data:
             files_data.append({"name": f.filename or "arquivo", "data": data, "ctype": f.content_type})
     jid = _create_job("create")
-    background_tasks.add_task(_run_create_job, jid, project_title, project_objective, files_data, site_url, youtube_url)
+    background_tasks.add_task(_run_create_job, jid, project_title, project_objective, files_data, site_url, youtube_url, user.get("sub",""))
     return {"job_id": jid, "status": "queued"}
 
 @app.post("/api/v1/notebooks/{notebook_id}/reanalyze-async")
-async def reanalyze_async(notebook_id: str, background_tasks: BackgroundTasks):
+async def reanalyze_async(notebook_id: str, request: Request, background_tasks: BackgroundTasks):
+    user = _require_user(request)
+    meta = store.get_notebook_meta(notebook_id)
+    if meta and meta.get("owner") and meta.get("owner") != user.get("sub"):
+        raise HTTPException(status_code=404, detail="Caderno não encontrado")
     jid = _create_job("reanalyze")
     background_tasks.add_task(_run_reanalyze_job, jid, notebook_id)
     return {"job_id": jid, "status": "queued"}
