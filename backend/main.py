@@ -367,6 +367,10 @@ async def health():
         "notebooklm_available": mvp_nblm.NOTEBOOKLM_AVAILABLE,
         "notebooklm_ready": nblm_ready,
         "notebooklm_msg": nblm_msg,
+        # diagnóstico sem segredo: só TAMANHO da env (0 = não chegou ao runtime)
+        "notebooklm_env_len": len(os.getenv("NOTEBOOKLM_STORAGE_STATE", "")),
+        "notebooklm_home": os.getenv("NOTEBOOKLM_HOME", ""),
+        "is_vercel": bool(os.getenv("VERCEL") or os.getenv("VERCEL_ENV")),
         "live_ok": live_ok,
         "version": "2.0.0-sprint2-mvp"
     }
