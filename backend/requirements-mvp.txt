@@ -1,9 +1,0 @@
-# MVP NotebookLM — adição ao requirements.txt base
-# Base já instalada: fastapi, uvicorn, pypdf, trafilatura, youtube-transcript-api, httpx
-# Para MVP NotebookLM:
-notebooklm-py[browser]>=0.9.0
-playwright>=1.40.0
-# Após instalar: playwright install chromium
-
-# Opcional — backend Android (sem browser, usa master_token)
-# pip install "notebooklm-py[android,browser]"

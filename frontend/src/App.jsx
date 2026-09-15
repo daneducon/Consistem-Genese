@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { GridSkeleton, SourcesSkeleton, MarkdownSkeleton } from './components/Skeleton';
+import Tooltip from './components/Tooltip';
+import InlineSpinner from './components/InlineSpinner';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
 
 export default function App() {
   const [notebooks, setNotebooks] = useState([]);
@@ -49,6 +52,7 @@ export default function App() {
   const [sourcesPage, setSourcesPage] = useState(1);
   const SOURCES_PER_PAGE = 12;
   const [showHistory, setShowHistory] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const showToast = (message, type = 'success', actionLabel = null, onAction = null) => {
     setFeedbackToast({ message, type, actionLabel, onAction });
@@ -103,7 +107,7 @@ export default function App() {
     try {
       const r = await fetch(`${API_BASE}/api/v1/sync/status`);
       if (r.ok) { const j = await r.json(); setLastSync(j.last_sync); }
-    } catch {}
+    } catch { }
   };
   useEffect(() => { fetchSyncStatus(); const id = setInterval(fetchSyncStatus, 300000); return () => clearInterval(id); }, []);
 
@@ -119,12 +123,12 @@ export default function App() {
     setSyncing(true);
     try {
       const r = await fetch(`${API_BASE}/api/v1/notebooks/sync`, { method: 'POST' });
-      const j = await r.json().catch(()=>({}));
+      const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.detail || 'Falha ao sincronizar.');
       if (j.cached) {
         setLastSync(j.last_sync);
         await fetchNotebooks();
-        showToast(j.warning || 'Sessão expirada — exibindo cache. Rode notebooklm login.', 'error', 'Entendi', () => {});
+        showToast(j.warning || 'Sessão expirada — exibindo cache. Rode notebooklm login.', 'error', 'Entendi', () => { });
         return;
       }
       setLastSync(j.last_sync);
@@ -308,6 +312,7 @@ export default function App() {
     e.preventDefault();
     const target = editingNotebook || selectedNotebook;
     if (!target) return;
+    setSavingEdit(true);
     try {
       const res = await fetch(`${API_BASE}/api/v1/notebooks/${target.id}`, {
         method: 'PUT',
@@ -324,6 +329,8 @@ export default function App() {
       showToast('Caderno atualizado com sucesso!');
     } catch (err) {
       showToast(err.message, 'error');
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -620,16 +627,18 @@ export default function App() {
               </select>
               <span className="text-xs text-[#46464a]">{filteredNotebooks.length} cadernos</span>
               {searchQuery && <button onClick={() => setSearchQuery('')} className="text-xs text-[#46464a] underline">Limpar busca</button>}
-              <button onClick={handleSync} disabled={syncing} title={lastSync ? `Último sync: ${lastSync}` : 'Sincronizar agora'} className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#eaf7f0] hover:bg-[#d8f0e3] border border-[#eaf7f0] rounded-full text-xs font-medium text-[#2e9e66] disabled:opacity-50 transition-colors">
-                <span className={`w-1.5 h-1.5 rounded-full bg-[#2e9e66] ${syncing ? 'animate-ping' : ''}`}></span>{syncing ? `Sincronizando... ${syncCountdown}s` : lastSync ? `Sincronizado · ${lastSync}` : 'Sincronizado'}
-              </button>
+              <Tooltip content={syncing ? `Sincronizando... ${syncCountdown}s` : lastSync ? `Última sincronização: ${lastSync}` : 'Sincronizar com NotebookLM agora'} side="top">
+                <button onClick={handleSync} disabled={syncing} className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#eaf7f0] hover:bg-[#d8f0e3] border border-[#eaf7f0] rounded-full text-xs font-medium text-[#2e9e66] disabled:opacity-50 transition-colors">
+                  {syncing ? <InlineSpinner size={10} light={false} className="border-[#2e9e66] border-t-transparent" /> : <span className="w-1.5 h-1.5 rounded-full bg-[#2e9e66]"></span>}{syncing ? `Sincronizando... ${syncCountdown}s` : lastSync ? `Sincronizado · ${lastSync}` : 'Sincronizado'}
+                </button>
+              </Tooltip>
             </div>
             {loadingList ? (
-              <div className="py-20 flex justify-center"><div className="w-6 h-6 border-2 border-[#2e2e30] border-t-transparent rounded-full animate-spin"></div></div>
+              <GridSkeleton count={6} />
             ) : notebooks.length === 0 ? (
               <div className="py-16 text-center bg-white border border-[#e8e9eb] rounded-xl">
                 <p className="text-sm text-[#191c1d]">Nenhum caderno cadastrado</p>
-                <p className="text-xs text-[#46464a] mt-1">Clique em Criar Novo Caderno para iniciar.</p>
+                <p className="text-xs text-[#46464a] mt-1">Clique em <span className="font-medium text-[#191c1d]">“Criar novo caderno”</span> para iniciar.</p>
               </div>
             ) : filteredNotebooks.length === 0 ? (
               <div className="py-16 text-center bg-white border border-[#e8e9eb] rounded-xl">
@@ -641,9 +650,13 @@ export default function App() {
                 {filteredNotebooks.map((nb) => (
                   <div key={nb.id} onClick={() => handleSelectNotebook(nb)} className="bg-white border border-[#e8e9eb] rounded-xl p-6 shadow-[0_4px_20px_-2px_rgba(46,46,48,0.04)] hover:shadow-[0_8px_24px_-4px_rgba(46,46,48,0.08)] transition-all cursor-pointer flex flex-col min-h-[180px] group">
                     <div className="flex justify-between items-start gap-2">
-                      <h3 className="text-base font-semibold leading-5 text-[#191c1d] line-clamp-2 group-hover:text-[#2e2e30] flex-1">{nb.title}</h3>
+                      <Tooltip content={nb.title} side="top">
+                        <h3 className="text-base font-semibold leading-5 text-[#191c1d] line-clamp-2 group-hover:text-[#2e2e30] flex-1">{nb.title}</h3>
+                      </Tooltip>
                       <div className="relative" onClick={(e) => e.stopPropagation()}>
-                        <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === nb.id ? null : nb.id); }} className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-[#f8f9fa] text-[#a5a5ab] text-sm">⋮</button>
+                        <Tooltip content="Mais ações" side="top">
+                          <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === nb.id ? null : nb.id); }} aria-label="Mais ações" className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-[#f8f9fa] text-[#a5a5ab] text-sm">⋮</button>
+                        </Tooltip>
                         {openMenuId === nb.id && (
                           <div className="absolute right-0 mt-1 w-40 bg-white border border-[#e8e9eb] rounded-xl shadow-[0_4px_20px_-2px_rgba(46,46,48,0.08)] z-30 py-1 text-xs">
                             <button onClick={(e) => openEditModal(nb, e)} className="w-full text-left px-3 py-2 hover:bg-[#f8f9fa] text-[#191c1d]">Editar caderno</button>
@@ -652,10 +665,16 @@ export default function App() {
                         )}
                       </div>
                     </div>
-                    <p className="mt-2 text-sm leading-6 text-[#46464a] line-clamp-2">{nb.objective || 'Sem objetivo definido.'}</p>
+                    <Tooltip content={nb.objective || 'Sem objetivo definido.'} side="top">
+                      <p className="mt-2 text-sm leading-6 text-[#46464a] line-clamp-2">{nb.objective || 'Sem objetivo definido.'}</p>
+                    </Tooltip>
                     <div className="mt-auto pt-4 flex justify-between items-center text-[11px] text-[#46464a]">
-                      <span>{nb.sourcesCount || (nb.sources ? nb.sources.length : 0)} fontes</span>
-                      <span>{formatDate(nb.updatedAt)}</span>
+                      <Tooltip content={`${nb.sourcesCount || (nb.sources ? nb.sources.length : 0)} fonte(s) vinculada(s)`}>
+                        <span>{nb.sourcesCount || (nb.sources ? nb.sources.length : 0)} fontes</span>
+                      </Tooltip>
+                      <Tooltip content={`Atualizado em ${formatDate(nb.updatedAt)}`}>
+                        <span>{formatDate(nb.updatedAt)}</span>
+                      </Tooltip>
                     </div>
                   </div>
                 ))}
@@ -675,13 +694,7 @@ export default function App() {
                 <span className="text-xs font-medium text-[#191c1d] bg-[#f8f9fa] border border-[#e8e9eb] px-2 py-1 rounded-full">{selectedNotebook.sources?.length || 0}</span>
               </div>
 
-              {loadingDetail && (
-                <div className="mt-4 space-y-2 animate-pulse">
-                  <div className="h-9 bg-[#f8f9fa] rounded-lg border border-[#e8e9eb]"></div>
-                  <div className="h-9 bg-[#f8f9fa] rounded-lg border border-[#e8e9eb]"></div>
-                  <div className="h-9 bg-[#f8f9fa] rounded-lg border border-[#e8e9eb]"></div>
-                </div>
-              )}
+              {loadingDetail && <SourcesSkeleton rows={4} />}
 
               {hasIndexingSources && !loadingDetail && (
                 <div className="mt-4 px-3 py-2 bg-[#fcf5e5] border border-[#fcf5e5] rounded-lg text-[11px] text-[#9c7013]">Indexando {selectedNotebook.sources.filter((s) => s.status === 'INDEXING').length} fonte(s) — atualização automática</div>
@@ -693,8 +706,12 @@ export default function App() {
                 ) : !loadingDetail && (
                   paginatedSources.map((s, idx) => (
                     <div key={s.id || idx} className="px-3 py-2.5 bg-[#f8f9fa] border border-[#e8e9eb] rounded-lg flex justify-between items-center gap-2">
-                      <span className="truncate text-xs text-[#191c1d]" title={s.name}>{s.name}</span>
-                      <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0 ${s.status === 'READY' ? 'bg-[#eaf7f0] text-[#2e9e66]' : 'bg-[#fcf5e5] text-[#9c7013]'}`}>{s.status === 'READY' ? 'Pronto' : 'Indexando...'}</span>
+                      <Tooltip content={s.name} side="top">
+                        <span className="truncate text-xs text-[#191c1d] max-w-[170px]">{s.name}</span>
+                      </Tooltip>
+                      <Tooltip content={s.status === 'READY' ? 'Fonte indexada e pronta para análise' : 'Indexando no NotebookLM — atualização automática a cada 4s'} side="top">
+                        <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0 inline-flex items-center gap-1 ${s.status === 'READY' ? 'bg-[#eaf7f0] text-[#2e9e66]' : 'bg-[#fcf5e5] text-[#9c7013]'}`}>{s.status !== 'READY' && <InlineSpinner size={10} className="border-[#9c7013] border-t-transparent" />}{s.status === 'READY' ? 'Pronto' : 'Indexando...'}</span>
+                      </Tooltip>
                     </div>
                   ))
                 )}
@@ -708,7 +725,11 @@ export default function App() {
 
               <div className="mt-4 flex gap-2">
                 <button onClick={() => { resetForm(); setIsAddSourceModalOpen(true); }} className="flex-1 py-2.5 bg-white border border-[#e8e9eb] rounded-full text-xs font-medium text-[#191c1d] hover:bg-[#f8f9fa]">Adicionar nova fonte</button>
-                <button onClick={() => fetchNotebookDetail(selectedNotebook.id)} className="px-3 py-2 bg-white border border-[#e8e9eb] rounded-full text-xs text-[#191c1d]">Atualizar</button>
+                <Tooltip content={loadingDetail ? 'Atualizando fontes...' : 'Recarregar fontes do NotebookLM'} side="top">
+                  <button onClick={() => fetchNotebookDetail(selectedNotebook.id)} disabled={loadingDetail} className="inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-[#e8e9eb] rounded-full text-xs text-[#191c1d] disabled:opacity-40 hover:bg-[#f8f9fa]">
+                    {loadingDetail && <InlineSpinner size={12} />}Atualizar
+                  </button>
+                </Tooltip>
               </div>
 
               {selectedNotebook.google_notebook_url && (
@@ -723,13 +744,19 @@ export default function App() {
                   <p className="text-sm text-[#46464a] mt-1">{selectedNotebook.objective || 'Sem objetivo definido.'}</p>
                 </div>
                 <div className="flex items-center gap-2 self-start">
-                  <button onClick={handleCopyMd} disabled={!selectedNotebook.analysisMd} className="px-4 py-2 bg-white border border-[#e8e9eb] rounded-full text-xs font-medium text-[#191c1d] disabled:opacity-40 hover:bg-[#f8f9fa]">Copiar</button>
-                  <button onClick={handleDownloadMd} disabled={!selectedNotebook.analysisMd} className="px-5 py-2 bg-[#df5241] hover:bg-[#c84434] text-white rounded-full text-xs font-medium disabled:opacity-40">Baixar .md</button>
+                  <Tooltip content={!selectedNotebook.analysisMd ? 'Nenhuma análise para copiar' : 'Copiar markdown para área de transferência'} side="top">
+                    <button onClick={handleCopyMd} disabled={!selectedNotebook.analysisMd} className="px-4 py-2 bg-white border border-[#e8e9eb] rounded-full text-xs font-medium text-[#191c1d] disabled:opacity-40 hover:bg-[#f8f9fa]">Copiar</button>
+                  </Tooltip>
+                  <Tooltip content={!selectedNotebook.analysisMd ? 'Gere a análise primeiro' : 'Baixar arquivo .md'} side="top">
+                    <button onClick={handleDownloadMd} disabled={!selectedNotebook.analysisMd} className="px-5 py-2 bg-[#df5241] hover:bg-[#c84434] text-white rounded-full text-xs font-medium disabled:opacity-40">Baixar .md</button>
+                  </Tooltip>
                 </div>
               </div>
 
               <div className="mt-6 max-h-[560px] overflow-y-auto pr-3 -mr-1 text-[#191c1d] scroll-pb-4">
-                {displayMd ? (
+                {loadingDetail ? (
+                  <MarkdownSkeleton />
+                ) : displayMd ? (
                   <div className="text-[14px] leading-[22px] text-[#46464a]">
                     <ReactMarkdown
                       components={{
@@ -779,7 +806,11 @@ export default function App() {
 
               <div className="mt-6 pt-4 border-t border-[#e8e9eb] flex flex-wrap justify-between items-center gap-3">
                 <span className="text-xs text-[#46464a]">{hasIndexingSources ? 'Aguarde a indexação para atualizar.' : 'Pronto para atualizar com as fontes atuais.'}</span>
-                <button onClick={handleReanalyze} disabled={hasIndexingSources || actionLoading} className="px-6 py-2.5 bg-[#191c1d] hover:bg-[#222223] text-white rounded-full text-xs font-medium disabled:opacity-40">Atualizar pré-análise</button>
+                <Tooltip content={hasIndexingSources ? `Aguarde ${selectedNotebook.sources.filter(s => s.status === 'INDEXING').length} fonte(s) finalizarem a indexação` : actionLoading ? 'Gerando análise...' : 'Gerar nova análise com o GEM'} side="top">
+                  <button onClick={handleReanalyze} disabled={hasIndexingSources || actionLoading} className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#191c1d] hover:bg-[#222223] text-white rounded-full text-xs font-medium disabled:opacity-40">
+                    {actionLoading && <InlineSpinner size={12} light />}Atualizar pré-análise
+                  </button>
+                </Tooltip>
               </div>
             </div>
           </div>
@@ -849,8 +880,10 @@ export default function App() {
                   )}
                 </div>
                 <div className="flex justify-end gap-2 pt-2">
-                  <button type="button" onClick={() => setIsCreateModalOpen(false)} className="px-4 py-2 bg-white border border-[#e8e9eb] rounded-full text-xs text-[#191c1d]">Cancelar</button>
-                  <button type="submit" className="px-5 py-2 bg-[#df5241] hover:bg-[#c84434] text-white rounded-full text-xs font-medium">Gerar pré-análise</button>
+                  <button type="button" onClick={() => setIsCreateModalOpen(false)} disabled={actionLoading} className="px-4 py-2 bg-white border border-[#e8e9eb] rounded-full text-xs text-[#191c1d] disabled:opacity-40">Cancelar</button>
+                  <button type="submit" disabled={actionLoading} className="inline-flex items-center gap-2 px-5 py-2 bg-[#df5241] hover:bg-[#c84434] text-white rounded-full text-xs font-medium disabled:opacity-60">
+                    {actionLoading && <InlineSpinner size={12} light />}{actionLoading ? 'Gerando...' : 'Gerar pré-análise'}
+                  </button>
                 </div>
               </form>
             </div>
@@ -864,7 +897,7 @@ export default function App() {
                 <h2 className="text-base font-semibold text-[#191c1d]">Adicionar fontes</h2>
                 <button onClick={() => setIsAddSourceModalOpen(false)} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#f8f9fa] text-[#46464a]">×</button>
               </div>
-              <p className="text-xs text-[#46464a] mb-3">Em <span className="font-medium text-[#191c1d]">{selectedNotebook?.title}</span></p>
+              <p className="text-xs text-[#46464a] mb-3">No caderno <span className="font-medium text-[#191c1d]">{selectedNotebook?.title}</span></p>
               <form onSubmit={handleAppendSource} className="space-y-4">
                 <div>
                   <label className="block text-xs font-medium text-[#191c1d] mb-1">Arquivos</label>
@@ -906,8 +939,10 @@ export default function App() {
                   )}
                 </div>
                 <div className="flex justify-end gap-2 pt-2">
-                  <button type="button" onClick={() => setIsAddSourceModalOpen(false)} className="px-4 py-2 bg-white border border-[#e8e9eb] rounded-full text-xs">Cancelar</button>
-                  <button type="submit" className="px-5 py-2 bg-[#df5241] hover:bg-[#c84434] text-white rounded-full text-xs font-medium">Anexar</button>
+                  <button type="button" onClick={() => setIsAddSourceModalOpen(false)} disabled={actionLoading} className="px-4 py-2 bg-white border border-[#e8e9eb] rounded-full text-xs disabled:opacity-40">Cancelar</button>
+                  <button type="submit" disabled={actionLoading} className="inline-flex items-center gap-2 px-5 py-2 bg-[#df5241] hover:bg-[#c84434] text-white rounded-full text-xs font-medium disabled:opacity-60">
+                    {actionLoading && <InlineSpinner size={12} light />}{actionLoading ? 'Anexando...' : 'Anexar'}
+                  </button>
                 </div>
               </form>
             </div>
@@ -931,8 +966,10 @@ export default function App() {
                   <textarea value={formObjective} onChange={(e) => setFormObjective(e.target.value)} className="w-full p-3 bg-white border border-[#e8e9eb] rounded-lg text-sm h-24 resize-none focus:outline-none focus:border-[#191c1d]" />
                 </div>
                 <div className="flex justify-end gap-2">
-                  <button type="button" onClick={() => { setIsEditModalOpen(false); setEditingNotebook(null); }} className="px-4 py-2 bg-white border border-[#e8e9eb] rounded-full text-xs">Cancelar</button>
-                  <button type="submit" className="px-5 py-2 bg-[#191c1d] hover:bg-[#222223] text-white rounded-full text-xs font-medium">Salvar</button>
+                  <button type="button" onClick={() => { setIsEditModalOpen(false); setEditingNotebook(null); }} disabled={savingEdit} className="px-4 py-2 bg-white border border-[#e8e9eb] rounded-full text-xs disabled:opacity-40">Cancelar</button>
+                  <button type="submit" disabled={savingEdit} className="inline-flex items-center gap-2 px-5 py-2 bg-[#191c1d] hover:bg-[#222223] text-white rounded-full text-xs font-medium disabled:opacity-60">
+                    {savingEdit && <InlineSpinner size={12} light />}Salvar
+                  </button>
                 </div>
               </form>
             </div>

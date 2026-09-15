@@ -3,6 +3,7 @@ backend/.env
 backend/.env.bak
 frontend/.env
 .env
+*.bak
 
 # Python
 __pycache__/
