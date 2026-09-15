@@ -335,12 +335,18 @@ export default function App() {
   const pollJob = async (jobId, onUpdate) => {
     for (let i = 0; i < 120; i++) {
       const r = await apiFetch(`${API_BASE}/api/v1/jobs/${jobId}`);
-      if (!r.ok) throw new Error('Job não encontrado');
+      if (r.status === 429) {
+        // rate limit transitório — espera e tenta de novo sem abortar
+        await new Promise((res) => setTimeout(res, 3000));
+        continue;
+      }
+      if (r.status === 404) throw new Error('Job não encontrado');
+      if (!r.ok) throw new Error('Falha ao consultar job');
       const job = await r.json();
       if (onUpdate) onUpdate(job);
       if (job.status === 'done') return job;
       if (job.status === 'error') throw new Error(job.error || job.message);
-      await new Promise((res) => setTimeout(res, 1000));
+      await new Promise((res) => setTimeout(res, 2500));
     }
     throw new Error('Timeout do job');
   };

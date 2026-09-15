@@ -84,7 +84,7 @@ TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
 # P0 Auth + Rate limit (memória) — para produção use Redis/Upstash
 API_KEY = os.getenv("API_KEY", "").strip()
 AUTH_DISABLED = os.getenv("AUTH_DISABLED", "true").lower() == "true"
-RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MINUTE", "120"))
 _rate_store: dict[str, list[float]] = {}
 import time as _time
 from fastapi import Request
@@ -153,8 +153,17 @@ def _check_auth(request: Request):
     if not API_KEY or key != API_KEY:
         raise HTTPException(status_code=401, detail="Não autorizado — X-API-Key inválida")
 
+_RATE_EXEMPT_PATHS = {"/health", "/api/v1/health", "/api/v1/sync/status"}
+
 def _check_rate(request: Request):
     if RATE_LIMIT <= 0:
+        return
+    p = request.url.path
+    # Polling leve (status de job, sync status, health) não consome cota:
+    # o front faz poll a cada poucos segundos e estouraria o balde de 60/min.
+    if p in _RATE_EXEMPT_PATHS:
+        return
+    if request.method == "GET" and (p.startswith("/api/v1/jobs/") or p.startswith("/api/v1/auth/")):
         return
     ip = request.client.host if request.client else "unknown"
     now = _time.time()
