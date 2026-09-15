@@ -21,6 +21,9 @@ USE_NOTEBOOKLM = os.getenv("USE_NOTEBOOKLM", "true").lower() == "true"
 IS_VERCEL = bool(os.getenv("VERCEL") or os.getenv("VERCEL_ENV"))
 NOTEBOOKLM_STORAGE_PATH = os.getenv("NOTEBOOKLM_STORAGE_PATH", "").strip()
 NOTEBOOKLM_TIMEOUT_S = float(os.getenv("NOTEBOOKLM_TIMEOUT_S", "9"))
+# Auth durável: master_token sobrevive a expiração de cookie. Env transporta o JSON,
+# o pacote lê do arquivo do perfil — então escrevemos no boot (0600) e fazemos refresh.
+NOTEBOOKLM_PROFILE = os.getenv("NOTEBOOKLM_PROFILE", "default").strip() or "default"
 
 # P1-3: cache simples 30s para sources + retry config
 _sources_cache: dict = {}  # notebook_id -> (timestamp, data)
@@ -47,6 +50,86 @@ def _record_sync_error(e: Exception) -> str:
 
 def get_last_sync_error() -> dict:
     return {"error": _last_sync_error, "at": _last_sync_error_at}
+
+
+def _profile_home() -> Path:
+    """Base dir dos perfis (respeita NOTEBOOKLM_HOME; na Vercel cai em /tmp)."""
+    raw = os.getenv("NOTEBOOKLM_HOME", "").strip()
+    if raw:
+        return Path(raw)
+    if IS_VERCEL:
+        return Path(tempfile.gettempdir()) / "nblmhome"
+    return Path.home() / ".notebooklm"
+
+
+def _ensure_master_token_profile() -> str | None:
+    """Se NOTEBOOKLM_MASTER_TOKEN_JSON estiver definida, materializa
+    <home>/profiles/<profile>/master_token.json (0600) e fixa NOTEBOOKLM_HOME.
+
+    Isso permite deploy com 1 variável durável em vez de trocar
+    NOTEBOOKLM_STORAGE_STATE a cada expiração de cookie.
+    """
+    raw = os.getenv("NOTEBOOKLM_MASTER_TOKEN_JSON", "").strip()
+    if not raw:
+        return None
+    try:
+        import base64 as _b64
+        import json as _json
+        try:
+            decoded = _b64.b64decode(raw).decode("utf-8")
+        except Exception:
+            decoded = raw
+        _json.loads(decoded)  # valida JSON
+        home = _profile_home()
+        prof_dir = home / "profiles" / NOTEBOOKLM_PROFILE
+        prof_dir.mkdir(parents=True, exist_ok=True)
+        mt_path = prof_dir / "master_token.json"
+        mt_path.write_text(decoded, encoding="utf-8")
+        try:
+            os.chmod(mt_path, 0o600)
+        except Exception:
+            pass
+        os.environ["NOTEBOOKLM_HOME"] = str(home)
+        return str(mt_path)
+    except Exception as e:
+        print(f"[notebooklm] NOTEBOOKLM_MASTER_TOKEN_JSON inválido: {e}")
+        return None
+
+
+def try_auto_refresh_storage(timeout_s: int = 25) -> dict:
+    """Tenta `notebooklm auth refresh` para re-mintar storage_state a partir
+    do master_token irmão. Best-effort: nunca levanta, retorna {ok, output}."""
+    global _last_sync_error
+    import subprocess as _sp
+    import sys as _sys
+    _ensure_master_token_profile()
+    try:
+        env = dict(os.environ)
+        # garante HOME visível ao CLI filho (serverless perde entre invokes)
+        env["NOTEBOOKLM_HOME"] = str(_profile_home())
+        if NOTEBOOKLM_PROFILE:
+            env["NOTEBOOKLM_PROFILE"] = NOTEBOOKLM_PROFILE
+        # remove fast-path por env que o CLI proíbe no login/refresh
+        env.pop("NOTEBOOKLM_STORAGE_STATE", None)
+        env.pop("NOTEBOOKLM_AUTH_JSON", None)
+        proc = _sp.run(
+            [_sys.executable, "-m", "notebooklm", "auth", "refresh"],
+            capture_output=True, text=True, timeout=timeout_s, env=env,
+        )
+        out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()[-1500:]
+        if proc.returncode == 0:
+            _last_sync_error = None
+            # limpa cache de listagem para forçar live na próxima chamada
+            try:
+                cache_path = google_cache_path()
+                if cache_path.exists():
+                    pass  # mantém cache como fallback, live vai sobrescrever
+            except Exception:
+                pass
+            return {"ok": True, "output": out or "refresh ok"}
+        return {"ok": False, "output": out or f"exit {proc.returncode}"}
+    except Exception as e:
+        return {"ok": False, "output": f"{type(e).__name__}: {e}"[:500]}
 
 
 def _restore_env_storage_state() -> str | None:
@@ -119,6 +202,12 @@ def is_notebooklm_ready() -> tuple[bool, str]:
         return False, f"lib não instalada: {NOTEBOOKLM_ERROR}"
     if not USE_NOTEBOOKLM:
         return False, "USE_NOTEBOOKLM=false (modo local/cache)"
+    # 0. master_token durável via env -> materializa perfil (não expira como cookie)
+    mt_path = _ensure_master_token_profile()
+    if mt_path and Path(mt_path).exists():
+        # se já há storage mintado no perfil, ok direto; senão, ainda ready
+        # porque o refresh pode mintar sob demanda
+        return True, f"auth ok (master_token): {mt_path}"
     # 1. path explícito via env
     if NOTEBOOKLM_STORAGE_PATH and Path(NOTEBOOKLM_STORAGE_PATH).exists():
         return True, f"auth ok (env path): {NOTEBOOKLM_STORAGE_PATH}"
@@ -126,6 +215,13 @@ def is_notebooklm_ready() -> tuple[bool, str]:
     restored = _restore_env_storage_state()
     if restored and Path(restored).exists():
         return True, f"auth ok (env): {restored}"
+    # 2b. perfil já mintado em disco (local ou /tmp persistido no invoke)
+    try:
+        prof_storage = _profile_home() / "profiles" / NOTEBOOKLM_PROFILE / "storage_state.json"
+        if prof_storage.exists():
+            return True, f"auth ok (perfil): {prof_storage}"
+    except Exception:
+        pass
     candidates = [
         Path(tempfile.gettempdir()) / "nblm_storage_state.json",
         Path.home() / ".notebooklm" / "profiles" / "default" / "storage_state.json",
@@ -140,7 +236,7 @@ def is_notebooklm_ready() -> tuple[bool, str]:
         except Exception:
             continue
     if IS_VERCEL:
-        return False, "modo cache (Vercel sem storage_state — defina NOTEBOOKLM_STORAGE_STATE ou hospede backend fora da Vercel)"
+        return False, "modo cache (Vercel sem auth — defina NOTEBOOKLM_MASTER_TOKEN_JSON (recomendado) ou NOTEBOOKLM_STORAGE_STATE)"
     return False, "auth não encontrada — rode: notebooklm login"
 
 def google_cache_path() -> Path:
@@ -200,6 +296,45 @@ async def list_google_notebooks() -> list[dict]:
     except Exception as e:
         _record_sync_error(e)
         print(f"[notebooklm] listagem live falhou (usa cache): {e}")
+        # Se há master_token durável, tenta 1 auto-refresh + 1 retry live
+        # (cobre cookie expirado sem precisar trocar variável manualmente).
+        try:
+            has_mt = bool(os.getenv("NOTEBOOKLM_MASTER_TOKEN_JSON", "").strip())
+            msg_low = str(e).lower()
+            looks_auth = any(k in msg_low for k in ("auth", "sign-in", "signin", "login", "401", "403", "expired", "unauthor", "redirect"))
+            if has_mt and (looks_auth or True):
+                ref = try_auto_refresh_storage()
+                print(f"[notebooklm] auto-refresh: {ref}")
+                if ref.get("ok"):
+                    try:
+                        async def _live_retry():
+                            async with NotebookLMClient.from_storage(**_client_kwargs()) as client:
+                                nbs = await client.notebooks.list()
+                                out = []
+                                for nb in nbs:
+                                    nb_id = getattr(nb, 'id', '') or str(nb)
+                                    nb_title = getattr(nb, 'title', '') or 'Sem título'
+                                    out.append({
+                                        "id": nb_id,
+                                        "title": nb_title,
+                                        "url": f"https://notebooklm.google.com/notebook/{nb_id}",
+                                        "sources_count": getattr(nb, 'sources_count', 0) or 0
+                                    })
+                                return out
+                        result = await asyncio.wait_for(_live_retry(), timeout=NOTEBOOKLM_TIMEOUT_S)
+                        try:
+                            cache_path.parent.mkdir(parents=True, exist_ok=True)
+                            import json as _j2, time as _t2
+                            cache_path.write_text(_j2.dumps({"ts": _t2.time(), "data": result}, ensure_ascii=False), encoding="utf-8")
+                        except Exception:
+                            pass
+                        _last_sync_error = None
+                        return result
+                    except Exception as e2:
+                        _record_sync_error(e2)
+                        print(f"[notebooklm] retry live após refresh falhou: {e2}")
+        except Exception as re:
+            print(f"[notebooklm] auto-refresh erro: {re}")
         cached, _ = read_notebooks_cache()
         return cached
 

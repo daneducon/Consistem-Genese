@@ -456,7 +456,69 @@ async def sync_status():
         "error": last_err.get("error"),
         "error_at": last_err.get("at"),
         "cached_count": cached_count,
+        "has_master_token": bool(os.getenv("NOTEBOOKLM_MASTER_TOKEN_JSON", "").strip()),
+        "is_vercel": bool(os.getenv("VERCEL") or os.getenv("VERCEL_ENV")),
     }
+
+@app.get("/api/v1/admin/notebooklm/status")
+async def nblm_admin_status(request: Request):
+    """Diagnóstico da auth NotebookLM (sem expor segredo): pronto? perfil? master_token?"""
+    _require_user(request)
+    ready, msg = mvp_nblm.is_notebooklm_ready()
+    last_err = mvp_nblm.get_last_sync_error()
+    import os as _os
+    return {
+        "ready": ready,
+        "msg": msg,
+        "last_error": last_err.get("error"),
+        "last_error_at": last_err.get("at"),
+        "has_master_token": bool(_os.getenv("NOTEBOOKLM_MASTER_TOKEN_JSON", "").strip()),
+        "has_storage_state": bool(_os.getenv("NOTEBOOKLM_STORAGE_STATE", "").strip()),
+        "is_vercel": bool(_os.getenv("VERCEL") or _os.getenv("VERCEL_ENV")),
+        "profile": _os.getenv("NOTEBOOKLM_PROFILE", "default"),
+    }
+
+@app.post("/api/v1/admin/notebooklm/refresh")
+async def nblm_admin_refresh(request: Request):
+    """Re-minta storage_state a partir do master_token (1 clique, sem PowerShell).
+
+    Exige NOTEBOOKLM_MASTER_TOKEN_JSON configurada. Roda `notebooklm auth refresh`
+    no backend e retorna o resultado.
+    """
+    _require_user(request)
+    import os as _os
+    if not _os.getenv("NOTEBOOKLM_MASTER_TOKEN_JSON", "").strip():
+        raise HTTPException(status_code=400, detail="Sem NOTEBOOKLM_MASTER_TOKEN_JSON — faça o login durável uma vez no PC (veja /login) e configure a variável")
+    result = await asyncio.to_thread(mvp_nblm.try_auto_refresh_storage)
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=f"Refresh falhou: {result.get('output','')[:300]}")
+    ready, msg = mvp_nblm.is_notebooklm_ready()
+    return {"status": "ok", "ready": ready, "msg": msg, "output": (result.get("output") or "")[-500:]}
+
+@app.post("/api/v1/admin/notebooklm/login")
+async def nblm_admin_login(request: Request):
+    """Abre a janela de login do Google no PC onde o backend está rodando.
+
+    NÃO funciona na Vercel (serverless sem display) — use apenas com backend local.
+    No local: abre o Chromium sozinho, você só faz login no Google na janela;
+    o storage é salvo automaticamente, sem digitar nada no PowerShell.
+    """
+    _require_user(request)
+    import os as _os
+    if _os.getenv("VERCEL") or _os.getenv("VERCEL_ENV"):
+        raise HTTPException(status_code=400, detail="Login com janela não funciona na Vercel (sem display). Rode o backend local ou use master_token + /refresh")
+    import subprocess as _sp
+    import sys as _sys
+    try:
+        # Popen destacado: abre a janela e libera a requisição na hora
+        _sp.Popen(
+            [_sys.executable, "-m", "notebooklm", "login"],
+            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            creationflags=0x00000008 if _os.name == "nt" else 0,  # DETACHED_PROCESS no Windows
+        )
+        return {"status": "ok", "message": "Janela de login aberta no PC do backend — complete o login no Google na janela. Depois rode /refresh ou sincronize."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Falha ao abrir login: {e}")
 
 @app.post("/api/v1/notebooks/sync")
 async def sync_notebooks(request: Request):
