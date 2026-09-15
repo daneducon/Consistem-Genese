@@ -27,6 +27,27 @@ _sources_cache: dict = {}  # notebook_id -> (timestamp, data)
 _CACHE_TTL = 30
 _RETRY_ATTEMPTS = 3
 
+# Diagnóstico: guarda o último erro live para expor via /sync/status (nunca segredo)
+_last_sync_error: str | None = None
+_last_sync_error_at: str | None = None
+
+def _record_sync_error(e: Exception) -> str:
+    """Resume o erro sem vazar segredo (cookies/tokens)."""
+    global _last_sync_error, _last_sync_error_at
+    msg = f"{type(e).__name__}: {str(e)[:300]}"
+    # corta possível leak de JSON de storage_state
+    if len(msg) > 300:
+        msg = msg[:300]
+    _last_sync_error = msg
+    try:
+        _last_sync_error_at = datetime.now().strftime("%d/%m/%Y-%H:%M")
+    except Exception:
+        _last_sync_error_at = None
+    return msg
+
+def get_last_sync_error() -> dict:
+    return {"error": _last_sync_error, "at": _last_sync_error_at}
+
 
 def _restore_env_storage_state() -> str | None:
     """Permite injetar storage_state via env (Vercel): NOTEBOOKLM_STORAGE_STATE=base64(json) -> /tmp.
@@ -172,8 +193,12 @@ async def list_google_notebooks() -> list[dict]:
             cache_path.write_text(json.dumps({"ts": time.time(), "data": result}, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
+        # live ok — limpa último erro
+        global _last_sync_error
+        _last_sync_error = None
         return result
     except Exception as e:
+        _record_sync_error(e)
         print(f"[notebooklm] listagem live falhou (usa cache): {e}")
         cached, _ = read_notebooks_cache()
         return cached

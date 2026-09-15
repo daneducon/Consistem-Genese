@@ -51,6 +51,7 @@ export default function App() {
   const [syncCountdown, setSyncCountdown] = useState(0);
   const [syncMode, setSyncMode] = useState('cache');
   const [syncLive, setSyncLive] = useState(false);
+  const [syncError, setSyncError] = useState(null);
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -138,6 +139,7 @@ export default function App() {
         setLastSync(j.last_sync);
         if (j.mode) setSyncMode(j.mode);
         setSyncLive(!!j.live);
+        setSyncError(j.error || null);
       }
     } catch { }
   };
@@ -162,11 +164,11 @@ export default function App() {
       setLastSync(j.last_sync);
       if (j.mode) setSyncMode(j.mode);
       setSyncLive(!!j.live);
+      setSyncError(j.error || null);
       await fetchNotebooks();
-      // Nunca mostra erro quando o backend responde com cache — só informa modo.
       if (!silent) {
         if (j.live) showToast(`Sincronizado — ${j.synced} cadernos`, 'success');
-        else showToast(`Sincronizado (cache) · ${j.last_sync || ''}`, 'success');
+        else showToast(`Modo cache · ${j.last_sync || ''}${j.error ? ` — ${j.error}` : ' — NotebookLM indisponível'}`, 'error', 'Tentar novamente', () => handleSync());
       }
     } catch (e) {
       if (silent) return; // sync de fundo nunca spamma erro
@@ -729,9 +731,9 @@ export default function App() {
               </select>
               <span className="text-xs text-[#46464a]" aria-live="polite">{filteredNotebooks.length} cadernos{searchQuery && ` para "${searchQuery}"`}</span>
               {searchQuery && <button onClick={() => { setSearchQuery(''); setSearchInput(''); }} className="text-xs text-[#46464a] underline focus:outline-none focus:ring-2 focus:ring-[#191c1d]/20 rounded">Limpar busca</button>}
-              <Tooltip content={syncing ? `Sincronizando... ${syncCountdown}s` : lastSync ? `Última sincronização: ${lastSync} (${syncLive ? 'tempo real' : 'cache'}) · auto-sync ativo` : 'Sincronizar com NotebookLM agora'} side="top">
-                <button onClick={() => handleSync()} disabled={syncing} className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#eaf7f0] hover:bg-[#d8f0e3] border border-[#eaf7f0] rounded-full text-xs font-medium text-[#2e9e66] disabled:opacity-50 transition-colors">
-                  {syncing ? <InlineSpinner size={10} light={false} className="border-[#2e9e66] border-t-transparent" /> : <span className={`w-1.5 h-1.5 rounded-full ${syncLive ? 'bg-[#2e9e66]' : 'bg-[#ebaf2d]'}`}></span>}{syncing ? `Sincronizando... ${syncCountdown}s` : lastSync ? `Sincronizado · ${lastSync}${syncLive ? '' : ' · cache'}` : 'Sincronizado'}
+              <Tooltip content={syncing ? `Sincronizando... ${syncCountdown}s` : lastSync ? `Última sincronização: ${lastSync} (${syncLive ? 'tempo real' : 'cache'}) · auto-sync ativo${!syncLive && syncError ? ` — ${syncError}` : ''}` : 'Sincronizar com NotebookLM agora'} side="top">
+                <button onClick={() => handleSync()} disabled={syncing} className={`ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-full text-xs font-medium disabled:opacity-50 transition-colors ${syncLive ? 'bg-[#eaf7f0] hover:bg-[#d8f0e3] border-[#eaf7f0] text-[#2e9e66]' : 'bg-[#fcf5e5] hover:bg-[#faeccb] border-[#f5dfa8] text-[#9c7013]'}`}>
+                  {syncing ? <InlineSpinner size={10} light={false} className="border-[#2e9e66] border-t-transparent" /> : <span className={`w-1.5 h-1.5 rounded-full ${syncLive ? 'bg-[#2e9e66]' : 'bg-[#ebaf2d]'}`}></span>}{syncing ? `Sincronizando... ${syncCountdown}s` : lastSync ? `${syncLive ? 'Sincronizado' : 'Cache'} · ${lastSync}${syncLive ? '' : ' · toque p/ tentar live'}` : 'Sincronizar'}
                 </button>
               </Tooltip>
             </div>

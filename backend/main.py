@@ -433,24 +433,29 @@ async def sync_status():
     cache_path = mvp_nblm.google_cache_path()
     last_sync = None
     ts = 0
+    cached_count = 0
     if cache_path.exists():
         try:
             j = json.loads(cache_path.read_text(encoding="utf-8"))
             ts = j.get("ts", 0)
             last_sync = time.strftime("%d/%m/%Y-%H:%M", time.localtime(ts))
+            cached_count = len(j.get("data", []))
         except Exception:
             pass
     nblm_ready, nblm_msg = mvp_nblm.is_notebooklm_ready()
+    last_err = mvp_nblm.get_last_sync_error()
     # leve: só lê arquivo + checa auth (sem rede), então pode reportar live real
     return {
         "last_sync": last_sync or "nunca",
         "notebooklm_ready": nblm_ready,
-        "live_ok": bool(nblm_ready),
-        "live": bool(nblm_ready),
-        "cached": bool(not nblm_ready),
-        "mode": "live" if nblm_ready else "cache",
+        "live_ok": bool(nblm_ready and not last_err.get("error")),
+        "live": bool(nblm_ready and not last_err.get("error")),
+        "cached": bool(not nblm_ready or last_err.get("error")),
+        "mode": "live" if (nblm_ready and not last_err.get("error")) else "cache",
         "msg": nblm_msg,
-        "error": None,
+        "error": last_err.get("error"),
+        "error_at": last_err.get("at"),
+        "cached_count": cached_count,
     }
 
 @app.post("/api/v1/notebooks/sync")
@@ -466,8 +471,14 @@ async def sync_notebooks(request: Request):
         pass
     try:
         google_nbs = await mvp_nblm.list_google_notebooks()
-    except Exception:
+    except Exception as e:
         google_nbs = []
+        try:
+            mvp_nblm._record_sync_error(e)
+        except Exception:
+            pass
+    last_err = mvp_nblm.get_last_sync_error()
+    err_msg = last_err.get("error")
     me = _get_user_from_request(request) or {}
     local_count = len([
         k for k, v in store.get_all_notebooks_meta().items()
@@ -479,16 +490,17 @@ async def sync_notebooks(request: Request):
             last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(j.get("ts", time.time())))
         except Exception:
             last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time()))
-        return {"synced": 0, "count": local_count, "last_sync": last, "cached": True, "live": False, "mode": "cache"}
+        return {"synced": 0, "count": local_count, "last_sync": last, "cached": True, "live": False, "mode": "cache", "error": err_msg or "NotebookLM indisponível — usando cache local"}
     after_mtime = cache_path.stat().st_mtime if cache_path.exists() else 0
-    is_cached = before_mtime != 0 and before_mtime == after_mtime
+    # Na Vercel /tmp é efêmero: before_mtime==0 não significa live. Só é live se não houve erro.
+    is_cached = bool(err_msg) or (before_mtime != 0 and before_mtime == after_mtime)
     if is_cached:
         try:
             j = json.loads(cache_path.read_text(encoding="utf-8"))
             last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(j.get("ts", time.time())))
         except Exception:
             last = time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time()))
-        return {"synced": len(google_nbs), "count": len(google_nbs), "last_sync": last, "cached": True, "live": False, "mode": "cache"}
+        return {"synced": len(google_nbs), "count": len(google_nbs), "last_sync": last, "cached": True, "live": False, "mode": "cache", "error": err_msg}
     # live fresco: só garante que store tem entrada, não busca fontes
     owner = me.get("sub", "") if me else ""
     synced = 0
@@ -503,7 +515,7 @@ async def sync_notebooks(request: Request):
             synced += 1
         except Exception:
             continue
-    return {"synced": synced, "count": len(google_nbs), "last_sync": time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time())), "cached": False, "live": True, "mode": "live"}
+    return {"synced": synced, "count": len(google_nbs), "last_sync": time.strftime("%d/%m/%Y-%H:%M", time.localtime(time.time())), "cached": False, "live": True, "mode": "live", "error": None}
 
 # ==============================================================================
 # TELA 1: GRID & CADERNOS
