@@ -29,7 +29,14 @@ _RETRY_ATTEMPTS = 3
 
 
 def _restore_env_storage_state() -> str | None:
-    """Permite injetar storage_state via env (Vercel): NOTEBOOKLM_STORAGE_STATE=base64(json) -> /tmp."""
+    """Permite injetar storage_state via env (Vercel): NOTEBOOKLM_STORAGE_STATE=base64(json) -> /tmp.
+
+    Além do arquivo plano em /tmp, espelha para
+    $NOTEBOOKLM_HOME/profiles/default/storage_state.json e fixa NOTEBOOKLM_HOME,
+    porque NotebookLMClient.from_storage() (sem path) resolve pelo HOME/perfil,
+    não pelo /tmp avulso. Sem isso o /health diria ready:true mas as chamadas
+    live continuariam caindo em cache na Vercel.
+    """
     raw = os.getenv("NOTEBOOKLM_STORAGE_STATE", "").strip()
     if not raw:
         return None
@@ -44,10 +51,37 @@ def _restore_env_storage_state() -> str | None:
         _json.loads(decoded)  # valida que é JSON
         tmp = Path(tempfile.gettempdir()) / "nblm_storage_state.json"
         tmp.write_text(decoded, encoding="utf-8")
+        # espelha para o layout de perfil que o from_storage() enxerga
+        try:
+            home = Path(os.getenv("NOTEBOOKLM_HOME", "").strip() or (Path(tempfile.gettempdir()) / "nblmhome"))
+            prof_dir = home / "profiles" / "default"
+            prof_dir.mkdir(parents=True, exist_ok=True)
+            (prof_dir / "storage_state.json").write_text(decoded, encoding="utf-8")
+            os.environ["NOTEBOOKLM_HOME"] = str(home)
+        except Exception as e:
+            print(f"[notebooklm] aviso: não espelhou perfil ({e})")
         return str(tmp)
     except Exception as e:
         print(f"[notebooklm] NOTEBOOKLM_STORAGE_STATE inválido: {e}")
         return None
+
+
+def _storage_path_for_client() -> str | None:
+    """Path explícito p/ NotebookLMClient.from_storage(path=...)."""
+    if NOTEBOOKLM_STORAGE_PATH and Path(NOTEBOOKLM_STORAGE_PATH).exists():
+        return NOTEBOOKLM_STORAGE_PATH
+    restored = _restore_env_storage_state()
+    if restored and Path(restored).exists():
+        return restored
+    plat = Path(tempfile.gettempdir()) / "nblm_storage_state.json"
+    if plat.exists():
+        return str(plat)
+    return None
+
+
+def _client_kwargs() -> dict:
+    p = _storage_path_for_client()
+    return {"path": p} if p else {}
 
 GEM_SYSTEM_INSTRUCTION = """
 Você é o GEM: Analista de Diagnóstico T&D, especialista em mapeamento de necessidades de treinamento e análise de contexto.
@@ -112,7 +146,7 @@ async def list_google_notebooks() -> list[dict]:
         return cached
     try:
         async def _live():
-            async with NotebookLMClient.from_storage() as client:
+            async with NotebookLMClient.from_storage(**_client_kwargs()) as client:
                 nbs = await client.notebooks.list()
                 result = []
                 for nb in nbs:
@@ -153,7 +187,7 @@ async def get_notebook_sources(notebook_id: str) -> list[dict]:
     for attempt in range(attempts):
         try:
             async def _live_sources():
-                async with NotebookLMClient.from_storage() as client:
+                async with NotebookLMClient.from_storage(**_client_kwargs()) as client:
                     return await client.sources.list(notebook_id)
             srcs = await asyncio.wait_for(_live_sources(), timeout=NOTEBOOKLM_TIMEOUT_S)
             formatted = []
@@ -199,7 +233,7 @@ async def create_empty_notebook(title: str) -> tuple[str, str]:
         fake_id = f"nb_local_{os.urandom(4).hex()}"
         return fake_id, f"https://notebooklm.google.com/notebook/{fake_id}"
     
-    async with NotebookLMClient.from_storage() as client:
+    async with NotebookLMClient.from_storage(**_client_kwargs()) as client:
         nb = await client.notebooks.create(title)
         nb_id = nb.id if hasattr(nb, 'id') else (nb.get('id') if isinstance(nb, dict) else str(nb))
         return nb_id, f"https://notebooklm.google.com/notebook/{nb_id}"
@@ -211,7 +245,7 @@ async def add_sources_to_notebook(notebook_id: str, raw_files: list = None, site
         return []
     
     added_list = []
-    async with NotebookLMClient.from_storage() as client:
+    async with NotebookLMClient.from_storage(**_client_kwargs()) as client:
         # 1. Arquivos brutos
         for f in (raw_files or []):
             try:
@@ -303,7 +337,7 @@ async def rename_google_notebook(notebook_id: str, new_title: str) -> bool:
     if not ready or not USE_NOTEBOOKLM:
         return True
     try:
-        async with NotebookLMClient.from_storage() as client:
+        async with NotebookLMClient.from_storage(**_client_kwargs()) as client:
             await client.notebooks.rename(notebook_id, new_title)
             return True
     except Exception as e:
@@ -316,7 +350,7 @@ async def delete_google_notebook(notebook_id: str) -> bool:
     if not ready or not USE_NOTEBOOKLM:
         return True
     try:
-        async with NotebookLMClient.from_storage() as client:
+        async with NotebookLMClient.from_storage(**_client_kwargs()) as client:
             await client.notebooks.delete(notebook_id)
             return True
     except Exception as e:
