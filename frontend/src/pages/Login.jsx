@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import WordRotate from '../../components/WordRotate.jsx';
+import WordRotate from '../components/WordRotate.jsx';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID || '';
