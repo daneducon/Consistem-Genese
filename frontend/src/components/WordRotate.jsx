@@ -6,7 +6,7 @@ import React, { useEffect, useState } from 'react';
 // (-25%/-50%/-75%) e por easing aplicado em cima de pausas longas.
 const DEFAULT_WORDS = ['treinamentos.', 'cursos.', 'workshops.'];
 
-export default function WordRotate({ words = DEFAULT_WORDS, duration = 9 }) {
+export default function WordRotate({ words = DEFAULT_WORDS, duration = 6 }) {
   const len = Math.max(words.length, 1);
   // duration (legado) = tempo total do ciclo em segundos -> intervalo por palavra
   const intervalMs = duration > 20 ? duration : Math.round((duration * 1000) / len);
