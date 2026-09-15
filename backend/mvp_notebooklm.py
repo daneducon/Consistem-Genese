@@ -96,9 +96,10 @@ def _ensure_master_token_profile() -> str | None:
         return None
 
 
-def try_auto_refresh_storage(timeout_s: int = 25) -> dict:
+def try_auto_refresh_storage(timeout_s: int = 15) -> dict:
     """Tenta `notebooklm auth refresh` para re-mintar storage_state a partir
-    do master_token irmão. Best-effort: nunca levanta, retorna {ok, output}."""
+    do master_token irmão. Best-effort: nunca levanta, retorna {ok, output}.
+    Timeout curto de propósito (serverless tem orçamento de segundos)."""
     global _last_sync_error
     import subprocess as _sp
     import sys as _sys
@@ -158,7 +159,7 @@ def _restore_env_storage_state() -> str | None:
         # espelha para o layout de perfil que o from_storage() enxerga
         try:
             home = Path(os.getenv("NOTEBOOKLM_HOME", "").strip() or (Path(tempfile.gettempdir()) / "nblmhome"))
-            prof_dir = home / "profiles" / "default"
+            prof_dir = home / "profiles" / NOTEBOOKLM_PROFILE
             prof_dir.mkdir(parents=True, exist_ok=True)
             (prof_dir / "storage_state.json").write_text(decoded, encoding="utf-8")
             os.environ["NOTEBOOKLM_HOME"] = str(home)
@@ -171,9 +172,22 @@ def _restore_env_storage_state() -> str | None:
 
 
 def _storage_path_for_client() -> str | None:
-    """Path explícito p/ NotebookLMClient.from_storage(path=...)."""
+    """Path explícito p/ NotebookLMClient.from_storage(path=...).
+
+    Ordem importa: o storage do PERFIL vem primeiro, porque `auth refresh`
+    minta o cookie novo exatamente ali. Se restaurássemos a env
+    (NOTEBOOKLM_STORAGE_STATE, potencialmente velha) por cima a cada chamada,
+    o retry pós-refresh usaria o cookie expirado de novo.
+    """
     if NOTEBOOKLM_STORAGE_PATH and Path(NOTEBOOKLM_STORAGE_PATH).exists():
         return NOTEBOOKLM_STORAGE_PATH
+    _ensure_master_token_profile()
+    try:
+        prof_storage = _profile_home() / "profiles" / NOTEBOOKLM_PROFILE / "storage_state.json"
+        if prof_storage.exists():
+            return str(prof_storage)
+    except Exception:
+        pass
     restored = _restore_env_storage_state()
     if restored and Path(restored).exists():
         return restored

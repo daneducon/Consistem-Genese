@@ -11,6 +11,7 @@ PyJWT==2.9.0
 google-auth==2.40.0
 
 # MVP NotebookLM (NotebookLM + Sync) — Vercel tem 0.8.2 como máx (py3.12), use 0.8.x compatível
-notebooklm-py[browser]==0.8.2
+# headless (gpsoauth) é obrigatório: sem ele o `auth refresh` não re-minta cookie do master_token na Vercel
+notebooklm-py[browser,headless]==0.8.2
 playwright==1.48.0
 # Opcional — backend Android (sem browser, usa master_token): pip install "notebooklm-py[android,browser]"
