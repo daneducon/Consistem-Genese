@@ -17,3 +17,31 @@
   background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
   animation: shimmer 1.4s infinite;
 }
+
+/* WordRotate (estilo Magic UI): máscara de 1 linha + trilha com 3 palavras + repetição da 1ª */
+.wr {
+  display: inline-flex;
+  overflow: hidden;
+  height: 1.12em;
+  vertical-align: bottom;
+}
+.wr-track {
+  display: inline-flex;
+  flex-direction: column;
+  animation: wr-spin 9s ease-in-out infinite;
+  will-change: transform;
+}
+.wr-track > span {
+  height: 1.12em;
+  line-height: 1.12;
+  white-space: nowrap;
+}
+@keyframes wr-spin {
+  0%, 22% { transform: translateY(0); }
+  30%, 52% { transform: translateY(-25%); }
+  60%, 82% { transform: translateY(-50%); }
+  90%, 100% { transform: translateY(-75%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wr-track { animation: none; }
+}

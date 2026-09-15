@@ -4,6 +4,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import { GridSkeleton, SourcesSkeleton, MarkdownSkeleton } from './components/Skeleton';
 import Tooltip from './components/Tooltip';
 import InlineSpinner from './components/InlineSpinner';
+import WordRotate from './components/WordRotate.jsx';
 import Login from './pages/Login.jsx';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
@@ -694,7 +695,7 @@ export default function App() {
             <section className="pt-2 pb-6 max-w-[720px]">
               <p className="text-[11px] font-semibold tracking-[0.08em] uppercase text-[#df5241]">Diagnóstico de T&D</p>
               <h1 className="mt-2 text-[32px] md:text-[40px] font-semibold tracking-[-0.02em] leading-[0.95] text-[#191c1d]">Analise cenários.</h1>
-              <h1 className="text-[32px] md:text-[40px] font-semibold tracking-[-0.02em] leading-[0.95] text-[#191c1d]">Estruture treinamentos.</h1>
+              <h1 className="text-[32px] md:text-[40px] font-semibold tracking-[-0.02em] leading-[0.95] text-[#191c1d]">Estruture <WordRotate /></h1>
               <p className="mt-4 text-sm leading-6 text-[#46464a]">Reúna seus materiais em um só lugar e receba diagnósticos de T&D com roteiros de entrevista em segundos.</p>
 
               <div className="mt-6">

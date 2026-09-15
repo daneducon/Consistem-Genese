@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import WordRotate from '../../components/WordRotate.jsx';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID || '';
@@ -82,11 +83,11 @@ export default function Login({ onLogin }) {
         <img src="/logo_genese.png" alt="Consistem Gênese" className="h-12 w-auto object-contain object-left" />
         <p className="mt-10 text-[12px] font-semibold tracking-[0.18em] text-[#d63b2f]">DIAGNÓSTICO DE T&amp;D</p>
         <h1 className="mt-4 text-[44px] lg:text-[54px] font-semibold tracking-[-0.02em] leading-[1.05] text-[#191c1d]">
-          Analise cenários.<br />Estruture treinamentos.
+          Analise cenários.<br />Estruture <WordRotate />
         </h1>
         <p className="mt-5 max-w-[440px] text-[15px] leading-7 text-[#46464a]">
           Reúna PDFs, links e vídeos em um só lugar e receba diagnósticos de T&amp;D
-          com roteiros de entrevista em segundos, via NotebookLM + Gemma.
+          com roteiros de entrevista em segundos.
         </p>
       </div>
 
@@ -100,7 +101,6 @@ export default function Login({ onLogin }) {
         <div className="absolute inset-0 bg-gradient-to-t from-[#191c1d]/85 via-[#232326]/55 to-[#232326]/35"></div>
 
         <div className="relative w-full max-w-[400px] bg-white rounded-[1.5rem] px-8 py-9 shadow-2xl">
-          <img src="/logo_genese.png" alt="Consistem Gênese" className="h-16 w-auto object-contain" />
           <p className="mt-6 text-[11px] font-semibold tracking-[0.18em] text-[#a5a5ab]">CONSISTEM GÊNESE</p>
           <h2 className="mt-2 text-[26px] font-semibold tracking-[-0.01em] text-[#191c1d]">Bem-vindo ao Gênese</h2>
           <p className="mt-2 text-sm leading-6 text-[#46464a]">
@@ -127,9 +127,6 @@ export default function Login({ onLogin }) {
             <p className="text-[11px] leading-5 text-[#a5a5ab]">
               <span className="inline-block align-[-2px] mr-1.5">🔒</span>
               O acesso é validado pela conta Google da Consistem e protegido por sessão segura.
-            </p>
-            <p className="mt-3 text-[10px] leading-4 text-[#c4c4c9]">
-              Problemas? Verifique se o Authorized origin em Google Cloud inclui <span className="font-mono bg-[#f4f4f5] border border-[#e8e9eb] px-1 py-0.5 rounded">https://consistem-genese.vercel.app</span>
             </p>
           </div>
         </div>
